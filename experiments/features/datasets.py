@@ -1,3 +1,7 @@
+"""
+Datasets for the features experiments
+"""
+
 from typing import Optional
 
 import numpy as np
@@ -7,6 +11,10 @@ from .schemas import FeaturesEvent, ParametrizedFeaturesEvent
 
 
 class FeaturesDataset(Dataset):
+    """
+    Non-parametrized features dataset
+    """
+
     def __init__(self, x: np.ndarray, score: Optional[np.ndarray] = None, **kwargs):
         score = score if score is not None else np.zeros((len(x), 1))
         assert len(score) == len(x)
@@ -21,6 +29,10 @@ class FeaturesDataset(Dataset):
 
 
 class ParametrizedFeaturesDataset(FeaturesDataset):
+    """
+    Parametrized features dataset
+    """
+
     def __init__(self, x, theta, score=None, ratio=None, labels=None):
         super().__init__(x, score)
         ratio = ratio if ratio is not None else np.zeros((len(x), 1))

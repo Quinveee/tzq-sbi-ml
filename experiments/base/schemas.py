@@ -1,3 +1,7 @@
+"""
+Useful data containers
+"""
+
 from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Tuple, Union
 

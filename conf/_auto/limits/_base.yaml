@@ -7,7 +7,7 @@ resolutions: ???
 asimov: 
   theta_true: ???
   sample_only_from_closest_benchmark: true
-  n_asimov: 10000
+  n_asimov: 10000 # NOTE: madminer will sample a different Asimov if this is not `null` (set seed)
 
 # Only used when `experiment=histos`
 hist_vars: ["pt_j1", "pt_l1"]

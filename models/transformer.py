@@ -1,6 +1,7 @@
 """Transformer architecture"""
 
 from dataclasses import replace
+from typing import Mapping
 
 import torch.nn as nn
 
@@ -8,23 +9,40 @@ from .configs import MLPConfig, SAConfig
 from .modules.te import TE
 
 
-def derive_emb_hidden(dim_in, emb_factor, num_heads):
+def derive_emb_hidden(dim_in: int, emb_factor: int, num_heads: int) -> int:
+    """
+    Derives the maximum allowed embedding dimension for hidden states
+    based on the increasing factor and the number of attention heads requested
+
+    :param dim_in: Feature dimension
+    :type dim_in: int
+    :param emb_factor: Increasing factor
+    :type emb_factor: int
+    :param num_heads: Number of attention heads
+    :type num_heads: int
+    :return: Hidden embedding dimension
+    :rtype: int
+    """
     emb_candidate = dim_in * emb_factor
     emb = emb_candidate - (emb_candidate % num_heads)
     return max(emb, num_heads)
 
 
 class Transformer(nn.Module):
+    """
+    Transformer architecture
+    """
+
     def __init__(
         self,
-        dim_in,
-        emb_factor,
-        dim_out,
-        num_blocks,
-        attention,
-        mlp,
-        dropout_p,
-    ):
+        dim_in: int,
+        emb_factor: int,
+        dim_out: int,
+        num_blocks: int,
+        attention: Mapping,
+        mlp: Mapping,
+        dropout_p: float,
+    ) -> None:
         super().__init__()
 
         emb_hidden = derive_emb_hidden(dim_in, emb_factor, attention.num_heads)

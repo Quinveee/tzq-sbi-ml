@@ -26,7 +26,8 @@ class MultiHA(nn.Module):
         self.config = config
 
     def forward(self, x: torch.Tensor, **attn_kwds):
-        """We flatten batch and sequence length dimensions and use an attn matrix
+        """
+        We flatten batch and sequence length dimensions and use an attn matrix
         to separate particles belonging to different events
         """
         b, e = x.size()

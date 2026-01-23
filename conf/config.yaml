@@ -1,21 +1,8 @@
 defaults:
-  # cli overrides
   - exp: ???
   - dataset: ???
-  - model: noop
+  - model: noop # Not necessarily needed if exp=histos
   - launcher: local
-
-  # # this only works when `hydra.mode=RUN`. 
-  # # I'm doing Python trickery so that it works
-  # # even if `hydra.mode=MULTIRUN`. 
-  # # 
-  # # autocomposing (AFTER cli overrides)
-  # - _auto/limits@limits: ${dataset}
-  # - _auto/dataset@dataset: ${model}
-  # - _auto/exp_model@_here_: ${exp}_${model}
-  # - optional _auto/loss@loss: ${exp}
-
-  # - hydra
   - _self_
 
 train:

@@ -1,3 +1,7 @@
+"""
+Useful containers specific to the 'features' case
+"""
+
 from dataclasses import dataclass
 
 import numpy as np

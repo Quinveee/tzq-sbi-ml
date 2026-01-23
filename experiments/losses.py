@@ -1,3 +1,7 @@
+"""
+Loss functions implemented in Madminer
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -11,11 +15,17 @@ if TYPE_CHECKING:
     from .base.schemas import ModelOutput
 
 # NOTE: The `REQUIRES_SCORE` flag is `True` only when the loss function
-# depends on the score and it is to be used with a log-likelihood
+# depends on the score and it is to be used with a log-likelihood ratio
 # regressor (e.g. SALLY uses the score but is to be used with score regressors)
 
 
 class Loss(ABC):
+    """
+    Base Loss class. The `REQUIRES_SCORE` flag is `True` only when the loss
+    function depends on the score and it is to be used with a log-likelihood ratio
+    regressor
+    """
+
     REQUIRES_SCORE: bool
 
     def __init__(self, **kwds):
@@ -23,18 +33,18 @@ class Loss(ABC):
 
     @classmethod
     @abstractmethod
-    def _forward(cls, output: ModelOutput, **kwds):
+    def forward(cls, output: ModelOutput, **kwds):
         pass
 
     def __call__(self, output):
-        return self._forward(output=output, **self._params)
+        return self.forward(output=output, **self._params)
 
 
 class ALICES(Loss):
     REQUIRES_SCORE = True
 
     @classmethod
-    def _forward(cls, output: ModelOutput, **kwds):
+    def forward(cls, output: ModelOutput, **kwds):
         alpha = kwds.get("alpha", 5)
         s = torch.sigmoid(-torch.log(output.target.ratio))
         bce = F.binary_cross_entropy_with_logits(-output.pred.log_ratio, s)
@@ -51,15 +61,15 @@ class ALICE(Loss):
     REQUIRES_SCORE = False
 
     @classmethod
-    def _forward(cls, output, **kwds):
-        return ALICES._forward(output=output, alpha=0.0)
+    def forward(cls, output, **kwds):
+        return ALICES.forward(output=output, alpha=0.0)
 
 
 class SALLY(Loss):
     REQUIRES_SCORE = False
 
     @classmethod
-    def _forward(cls, output, **kwds):
+    def forward(cls, output, **kwds):
         return F.mse_loss(output.pred.score, output.target.score)
 
 
@@ -67,7 +77,7 @@ class CARL(Loss):
     REQUIRES_SCORE = False
 
     @classmethod
-    def _forward(cls, output, **kwds):
+    def forward(cls, output, **kwds):
         return F.binary_cross_entropy_with_logits(
             -output.pred.log_ratio, output.target.label
         )
@@ -77,7 +87,7 @@ class ROLR(Loss):
     REQUIRES_SCORE = False
 
     @classmethod
-    def _forward(cls, output, **kwds):
+    def forward(cls, output, **kwds):
         log_r_clip = kwds.get("log_r_clip", 10.0)
         ratio = torch.clamp(
             output.target.ratio, np.exp(-log_r_clip), np.exp(log_r_clip)

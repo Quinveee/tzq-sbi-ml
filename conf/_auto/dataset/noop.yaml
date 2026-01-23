@@ -1,2 +1,2 @@
-# noop model is histo experiment
+# noop model for the histo experiment, which is 'features'
 path: ${dataset.base}/features

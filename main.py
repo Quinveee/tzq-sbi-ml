@@ -1,3 +1,8 @@
+"""
+Main file. Entrypoint for all experiments and the one that parses
+the `hydra` configuration files.
+"""
+
 from __future__ import annotations
 
 import os
@@ -15,6 +20,7 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 
+# Add custom handy resolvers
 OmegaConf.register_new_resolver(
     "env",
     lambda key: {"prefix": Path(sys.executable).parent, "cwd": os.getcwd()}.get(key),
@@ -22,7 +28,13 @@ OmegaConf.register_new_resolver(
 
 
 @hydra.main(config_name="config", config_path="conf", version_base=None)
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> None:
+    """Parses configuration object, derives fields and passes the final
+    config to the selected launcher
+
+    :param cfg: CL-specified configuration object
+    :type cfg: DictConfig
+    """
     cfg = derive_config(cfg)
     instantiate(cfg.launcher)(cfg=cfg)
 

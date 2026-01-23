@@ -10,4 +10,4 @@ net:
   hidden_layers: 2
   activation: gelu
   dropout: ${train.dropout}
-  dim_out: ...
+  dim_out: ... # Dynamically derived

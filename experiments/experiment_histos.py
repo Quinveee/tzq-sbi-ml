@@ -1,22 +1,32 @@
+"""Estimating LL ratios using histogrammed event observables"""
+
 from pathlib import Path
 
 from madminer.limits import AsymptoticLimits
 
 from .base.base_experiment import BaseExperiment
 from .limits.asymptotic_limits import Limits
-from .plotting import plot_llr
 
 
 class ExperimentHistos(BaseExperiment):
+    """
+    Experiment class for the histograms of observables approach
+    """
 
-    def __init__(self, *args, **kwds):
+    def __init__(self, *args, **kwds) -> None:
         kwds["key"] = "histos"
         super().__init__(*args, **kwds)
 
     def _init(self):
         pass
 
-    def eval_lims(self):
+    def eval_lims(self) -> Limits:
+        """
+        Delegate asymptotic limits evaluation to Madminer
+        :return: Limits object with grid and estimated LLR information
+        :rtype: Limits
+        """
+
         alims = AsymptoticLimits(self.cfg.dataset.events_file)
         grid, pvalues, mle, llr_kin, rate_ll, *_ = alims.expected_limits(
             mode="histo",
@@ -33,14 +43,8 @@ class ExperimentHistos(BaseExperiment):
             list(alims.parameters.keys()), grid, pvalues, mle, llr_kin, rate_ll
         )
 
-    def plot_llr(self, to=None):
-        return plot_llr([self.checkpoints.limits], labels=[str(self)], to=to)
-
-    def plot(self):
-        self.plot_llr(Path(self.cfg.data.run_dir) / "llr.png")
-
-    def _run(self):
+    def _run(self) -> None:
         if self.cfg.modes.eval:
             self.checkpoints.limits = self.eval_lims()
         if self.cfg.modes.plot:
-            self.plot()
+            self.plot("Histogram")

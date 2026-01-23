@@ -1,4 +1,13 @@
+"""
+Local launcher.
+"""
+
+
 def launch(*, worker, cfg):
-    """Simply pass the configuration object to the worker
-    and run locally"""
+    """
+    Docstring for launch
+
+    :param worker: Partially instantiated worker function
+    :param cfg: Parsed configuration object to be passed to the worker
+    """
     worker(cfg=cfg)

@@ -1,9 +1,13 @@
+"""
+Base experiment class for all ML-based experiments
+"""
+
 from __future__ import annotations
 
 from abc import abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Dict, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -13,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from ..logger import LOGGER as _LOGGER
-from ..plotting import plot_learning_curves, plot_llr
+from ..plotting import plot_learning_curves
 from ..utils import device, dtype
 from .base_experiment import BaseExperiment
 from .normalizers import get_normalizer
@@ -35,12 +39,17 @@ def needs_grad(flag):
 
 
 class BaseExperimentML(BaseExperiment):
-    # To be defined in subclasses
+    """
+    Base experiment class for all ML experiments
+    The class level attributes `collate_fn`, `dataset_cls` and `asymptotics_cls`
+    are to be defined by subclasses
+    """
+
     collate_fn = None
     dataset_cls = None
     asymptotics_cls = None
 
-    def __init__(self, *args, **kwds):
+    def __init__(self, *args, **kwds) -> None:
         super().__init__(*args, **kwds)
         self.model = None
         self.normalizer = None
@@ -54,6 +63,8 @@ class BaseExperimentML(BaseExperiment):
             "non_blocking": self.cfg.devices.non_blocking,
         }
 
+    ## Following abstract methods are to be implemented by subclasses ##
+
     @abstractmethod
     def _load_raw_data(self, *args, **kwds) -> ...: ...
 
@@ -66,7 +77,14 @@ class BaseExperimentML(BaseExperiment):
     @abstractmethod
     def _eval(self, output) -> ...: ...
 
+    ##
+
     def _init(self) -> None:
+        """
+        Datasets must be initialized before loaders.
+        The order of the resting methods is irrelevant
+
+        """
         self.init_loss_function()
         self.init_model()
         self.init_normalizer()
@@ -74,6 +92,10 @@ class BaseExperimentML(BaseExperiment):
         self.init_loaders()
 
     def _run(self) -> None:
+        """
+        Run training, evaluation and plotting
+
+        """
         if self.cfg.modes.train:
             LOGGER.info(f"Starting traing of exp. {self}")
             self.checkpoints.state_dict, self.checkpoints.losses = self.train()
@@ -85,13 +107,23 @@ class BaseExperimentML(BaseExperiment):
             self.plot()
 
     def init_loss_function(self) -> None:
+        """
+        Instantiate loss from configuration object
+
+        """
         self.loss_fn = instantiate(self.cfg.loss)
 
     def init_datasets(self) -> None:
+        """
+        Load raw data, normalize, create splits and store it in
+        torch datasets
+
+        """
         # Load raw data
         raw = self._load_raw_data(self.cfg.dataset.path)
 
         # Normalize raw
+        assert self.normalizer is not None
         raw.x_train = self.normalizer.fit_transform(raw.x_train)
         raw.x_test = self.normalizer.transform(raw.x_test)
 
@@ -101,6 +133,7 @@ class BaseExperimentML(BaseExperiment):
         split = self.cfg.train.validation_split
         assert 0.0 < split < 0.5, f"Validation split {split} seems wrong"
 
+        # Split manually
         self.train_dataset, self.val_dataset = random_split(
             dataset,
             [
@@ -111,56 +144,62 @@ class BaseExperimentML(BaseExperiment):
         self.test_dataset = self._load_dataset(raw, "test")
 
     def init_loaders(self) -> None:
+        """
+        Create torch loaders for the different splits
+
+        """
         factory_kwds = {
             "batch_size": self.cfg.train.batch_size,
             "pin_memory": self.cfg.devices.pin_memory,
             "shuffle": True,
             "collate_fn": self.collate_fn,
-            "num_workers": 0,  # Make dynamic?
+            "num_workers": 0,
         }
         self.train_loader = DataLoader(self.train_dataset, **factory_kwds)
         self.val_loader = DataLoader(self.val_dataset, **factory_kwds)
-        # Maybe change kwds?
         self.test_loader = DataLoader(self.test_dataset, **factory_kwds)
 
     def init_model(self) -> None:
+        """
+        Initialize model from configuration object
+        If specified, update model state dict from the checkpoints file
+        Move model to appropriate device
+
+        """
+        # Initialize model
         self.model = instantiate(self.cfg.model)
+
+        # If specified and available, start warm
         if self.cfg.modes.recycle and self.checkpoints.state_dict is not None:
             LOGGER.info("Starting warm!")
             self.model.load_state_dict(self.checkpoints.state_dict)
+
+        # Move model to device
         self.model = self.model.to(**self.device_kwds)
+
         LOGGER.info(f"Model moved to {str(self.device_kwds["device"])}")
 
     def init_normalizer(self) -> None:
+        """Set normalizer object based on model type"""
         self.normalizer = get_normalizer(str(self.model))
 
     def loss(self, batch):
+        """
+        Just pass the batch to the loss function (set by subclasses)
+
+        """
         return self.loss_fn(self._preds(batch))
 
-    # TODO:
-    # 1. Normalize input data (and labels? theta?)
-    # 2. Fix lr scheduler
-    # 3. Add eraly stopping with patience
-    def train(self):
+    def train(self) -> Tuple[Dict, Losses]:
+        """
+        Training loop
 
+        :return: Return model state dict and losses
+        :rtype: Tuple[Dict, Losses]
+        """
         train_losses, val_losses = [], []
-
-        # Optimizer
-        # opt = torch.optim.AdamW(params=self.model.parameters(), lr=2e-4, weight_decay=1e-4)
         opt = torch.optim.Adam(params=self.model.parameters(), lr=self.cfg.train.lr)
-
-        # LR scheduler
-        # FIXME first epoch lr is 0 ;(
-        # lr_sch = torch.optim.lr_scheduler.LambdaLR(
-        #     opt,
-        #     lambda i: min(
-        #         i / (self.cfg.train.lr_warmup / self.cfg.train.batch_size), 1.0
-        #     ),
-        # )
         lr_sch = None
-
-        # lr_sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.cfg.train.lr_warmup)
-        # lr_sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=1)
 
         # TensorBoard
         writer = SummaryWriter(log_dir="runs/model_experiment")
@@ -226,7 +265,6 @@ class BaseExperimentML(BaseExperiment):
             train_losses.append(avg_train_loss)
 
             # Validation
-            # TODO: Evaluation probably better in CPU?
             self.model.eval()
             val_loss = 0.0
 
@@ -247,12 +285,16 @@ class BaseExperimentML(BaseExperiment):
 
         return self.model.state_dict(), Losses(train=train_losses, val=val_losses)
 
-    # Rn I cannot calculate test metrics bc test data is not augmented :/ (yet!)
-    # I can calculate limits on parameter grid though
-    # TODO: What if evaluation needs to compute gradients w.r.t. theta?
-    # (for llr regressors).. we couldn't be in inference mode ...
     @torch.inference_mode()
-    def eval(self, loader) -> np.ndarray:
+    def eval(self, loader: DataLoader) -> np.ndarray:
+        """
+        Evaluate loader and return predictions as a numpy array
+
+        :param loader: Data laoder
+        :type loader: DataLoader
+        :return: Predictions as a numpy array
+        :rtype: ndarray[_AnyShape, dtype[Any]]
+        """
         self.model.eval()
         device_kwds = self.device_kwds.copy()
         device_kwds["device"] = device(self.cfg.devices.eval)
@@ -274,6 +316,18 @@ class BaseExperimentML(BaseExperiment):
         return torch.cat([p.cpu() for p in preds]).numpy()
 
     def eval_lims(self) -> Limits:
+        """
+        Calculate asymptotic limits
+        If using score regressors, first we create histograms of the score
+        If specified in the config, create an Asimov dataset using the test partition
+        Return the calculated limits object
+
+        ::note:: This method relies heaviliy on how things are implemented in
+        Madminer and will be substantially modified in the future
+
+        :return: Limits object
+        :rtype: Limits
+        """
         events_file = self.cfg.dataset.events_file
         alims = self.asymptotics_cls(events_file)
 
@@ -301,12 +355,16 @@ class BaseExperimentML(BaseExperiment):
                 len(self.cfg.limits.asimov.theta_true) == self.cfg.dataset.theta_dim
             ), "Shape mismatch"
 
+            # Sample weighted events from partition dataset
+            # `cfg.limits.test_split` defines where the test partition starts
             x_test, weights_test = alims.asimov_data(
                 self.cfg.limits.asimov.theta_true,
                 self.cfg.limits.asimov.sample_only_from_closest_benchmark,
                 self.cfg.limits.test_split,
                 self.cfg.limits.asimov.n_asimov,
             )
+
+            # Expected number of events (for *rate* llr estimation)
             n_events = (
                 self.cfg.limits.luminosity
                 # NOTE: first parameter needs to be a list of arrays or list of lists
@@ -317,6 +375,9 @@ class BaseExperimentML(BaseExperiment):
 
             LOGGER.info(f"Sampled {len(x_test)} events")
 
+            # Put sampled asimov events into a torch loader for evaluation
+            # In case of histos, there will be one loader for each point in the
+            # parameter grid
             test_loaders = self.create_lims_loaders(
                 x=x_test,
                 theta=theta_grid if not self.asymptotics_cls.NEEDS_HISTOS else None,
@@ -334,6 +395,8 @@ class BaseExperimentML(BaseExperiment):
         # Histos if needed
         histos = None
         if self.asymptotics_cls.NEEDS_HISTOS:
+            # We need *weighted* events for histogram creation, so we
+            # resample from the training partition
             LOGGER.info(f"Sampling train samples from train partition of {events_file}")
             x_train, weights_train, _ = alims.weighted_events_from_partition(
                 n_draws=self.cfg.limits.n_toys,
@@ -362,7 +425,11 @@ class BaseExperimentML(BaseExperiment):
         )
 
     def create_lims_loaders(self, x, theta=None):
+        """
+        Method to create torch loaders when using Asimov
+        """
         factory_kwds = {"batch_size": 100, "collate_fn": self.collate_fn}
+        assert self.dataset_cls is not None and self.normalizer is not None
         x = self.normalizer.transform(x)
         if theta is None:
             return [DataLoader(self.dataset_cls(x=x), **factory_kwds)]
@@ -378,14 +445,10 @@ class BaseExperimentML(BaseExperiment):
             for t in theta
         ]
 
-    def plot_llr(self, to=None):
-        return plot_llr(
-            [self.checkpoints.limits], labels=[f"{self.model} {self}"], to=to
-        )
-
     def plot_learning_curves(self, to=None):
+        assert self.checkpoints is not None
         return plot_learning_curves(self.checkpoints.losses, to=to)
 
     def plot(self) -> None:
-        self.plot_llr(Path(self.cfg.data.run_dir) / "llr.png")
+        super().plot(str(self.model))
         self.plot_learning_curves(Path(self.cfg.data.run_dir) / "learning_curve.png")

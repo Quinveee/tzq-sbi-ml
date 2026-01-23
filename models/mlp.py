@@ -3,7 +3,7 @@
 import torch.nn as nn
 
 from .configs import MLPConfig
-from .modules.mlp import MLP as _MLP
+from .modules.mlp import MLP as MLPModule
 
 
 class MLP(nn.Module):
@@ -29,7 +29,7 @@ class MLP(nn.Module):
             bias=bias,
             dropout_p=dropout,
         )
-        self.net = _MLP(mlp)
+        self.net = MLPModule(mlp)
 
     def forward(self, inputs):
         return self.net(inputs)

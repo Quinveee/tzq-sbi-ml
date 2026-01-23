@@ -1,1 +1,15 @@
-# TODO
+defaults: 
+  - _base
+  - _self_
+
+key: ensemble
+
+# checkpoints_from:
+#   exp: ["histo", "ratio", "ratio", "ratio"]
+#   model: ["", "mlp", "transformer", "lgatr"]
+#   runs: [ [1, 1], [1, 2], [1, 2] , [5, 6] ]
+
+checkpoints_from:
+  exp: ["histo", "local", "local", "local"]
+  model: ["", "mlp", "transformer", "lgatr"]
+  runs: [ [1, 1], [1, 2], [1, 2] , [1, 2] ]

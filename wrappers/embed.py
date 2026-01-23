@@ -1,18 +1,27 @@
+"""
+Functions to embed particle four momenta into the GA multivectors
+"""
+
 from typing import Literal
 
 import torch
 from lgatr import embed_scalar, embed_vector
 
-# NOTE: I'm not using the `scalars` possibility at all yet
 
+def to_multivector(fourmomenta: torch.Tensor) -> torch.Tensor:
+    """
+    Embed fourmomenta into multivector and add extra dimensions
+    so that output is (batch dim, particles dim, mv channels, multivector dim)
 
-def to_multivector(fourmomenta: torch.Tensor):
+    :param fourmomenta: size: (number of particles, 4)
+    :type fourmomenta: torch.Tensor
+    :return: Multivector with the correct dimensions
+    :rtype: Tensor
+
     """
-    fourmomenta: (nparticles, 4)
-    """
-    fourmomenta = fourmomenta.unsqueeze(-2)  # (nparticles, 1, 4)
-    mv = embed_vector(fourmomenta)  # (nparticles, 1, 16)
-    return mv.unsqueeze(0)  # (1, nparticles, 1, 16)
+    fourmomenta = fourmomenta.unsqueeze(-2)  # (num particles, 1, 4)
+    mv = embed_vector(fourmomenta)  # (num particles, 1, 16)
+    return mv.unsqueeze(0)  # (1, num particles, 1, 16)
 
 
 def to_multivector_parametrized(
@@ -20,18 +29,20 @@ def to_multivector_parametrized(
     theta: torch.Tensor,
     ptr: torch.Tensor,
     mode: Literal["tokens", "channels"],
-):
+) -> torch.Tensor:
     """
-    Takes as input fourmomenta, theta and ptr corresponding to a batch of
-    particles. the ptr dived the batch into events
+    Embed the four momenta together with the theory parameters in multivectors
 
-    fourmomenta: (nparticles, 4)
-    theta: (batch_size, theta_dim)
-    ptr: (batch_size + 1,)
-
-    Returns:
-        multivectors (torch.Tensor): to feed the LGATr
-        theta_multivectors (torch.Tensor): used to create `multivectors` with concatenation
+    :param fourmomenta: (num particles, 4)
+    :type fourmomenta: torch.Tensor
+    :param theta: (batch size, theta dim)
+    :type theta: torch.Tensor
+    :param ptr: (batch size + 1,)
+    :type ptr: torch.Tensor
+    :param mode: Mode to encode the theory parameters in the multivectors
+    :type mode: Literal["tokens", "channels"]
+    :return: Parametrized multivectors
+    :rtype: Tensor
     """
     # TODO: Embed paramters either as:
     #   1. Extra multivector channels (one for each dimension of the parameter vector)
@@ -39,7 +50,7 @@ def to_multivector_parametrized(
     #   associated set of parameter multivectors (DIRTIER, EASIER)
     #   2. Extra (global) tokens (one for each dimension of the parameter vector)
     #   This are prepended as global tokens for each event (CLEANER, HARDER)
-    mvs = to_multivector(fourmomenta)  # (1, nparticles, 1, 16)
+    mvs = to_multivector(fourmomenta)  # (1, num_particles, 1, 16)
 
     # Make sure `ptr` is of integer type
     ptr = ptr.to(dtype=torch.long)
@@ -49,12 +60,12 @@ def to_multivector_parametrized(
         theta_dim = theta.shape[1]
         theta = theta.repeat_interleave(
             ptr[1:] - ptr[:-1], dim=0
-        )  # (nparticles, theta_dim)
+        )  # (num_particles, theta_dim)
 
         assert theta.size() == (n, theta_dim)
 
-        theta_mvs = embed_scalar(theta.unsqueeze(-1))  # (nparticles, theta_dim, 16)
-        theta_mvs = theta_mvs.unsqueeze(0)  # (1, nparticles, theta_dim, 16)
+        theta_mvs = embed_scalar(theta.unsqueeze(-1))  # (num_particles, theta_dim, 16)
+        theta_mvs = theta_mvs.unsqueeze(0)  # (1, num_particles, theta_dim, 16)
         multivectors = torch.cat((mvs, theta_mvs), dim=-2)
 
         return multivectors  # (batch, particles, theta_dim + 1, 16)

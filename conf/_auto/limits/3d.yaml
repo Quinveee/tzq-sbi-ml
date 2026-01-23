@@ -1,3 +1,4 @@
+# 3D grid
 theta_ranges: [ [-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0] ]
 resolutions: [9, 9, 9]
 asimov: 

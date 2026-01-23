@@ -5,8 +5,8 @@ defaults:
 key: transformer
 net:
   _target_: models.transformer.Transformer
-  dim_in: ...
-  dim_out: ...
+  dim_in: ... # Dynamically derived
+  dim_out: ... # Dynamically derived
   emb_factor: 8
   num_blocks: 2
   dropout_p: ${train.dropout}

@@ -5,8 +5,8 @@ defaults:
 key: lgatr
 net:
   _target_: lgatr.LGATr
-  in_mv_channels: ...
-  out_mv_channels: ...
+  in_mv_channels: ... # Dynamically derived
+  out_mv_channels: ... # Dynamically derived
   num_blocks: 2
   in_s_channels: 0
   out_s_channels: 0
@@ -17,4 +17,5 @@ net:
     num_heads: 2
   mlp: {}
 
+# Delay initialization of the `net` object
 _recursive_: false

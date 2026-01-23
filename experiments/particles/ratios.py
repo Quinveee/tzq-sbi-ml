@@ -1,3 +1,5 @@
+"""Experiment class for likelihood ratio regression in the 'particles' case"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -15,6 +17,13 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
     collate_fn = staticmethod(parametrized_collate_particles_fn)
 
     def _preds(self, batch: ParametrizedParticleBatch):
+        """
+        Return model predictions
+
+        :param self: Description
+        :param batch: Description
+        :type batch: ParametrizedParticleBatch
+        """
         # To later compute score based on regressed log-likelihood ratio
         batch.theta.requires_grad_(self.loss_fn.REQUIRES_SCORE)
         embedding_kwargs = {"theta": batch.theta, "ptr": batch.ptr, "mode": "channels"}

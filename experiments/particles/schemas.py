@@ -1,3 +1,7 @@
+"""
+Useful containers for the 'particles' approach
+"""
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,8 +24,6 @@ class ParametrizedParticlesEvent(ParticlesEvent):
     label: np.ndarray
 
 
-# TODO: Here `ptr` is also casted to whatever `dtype` we have set globally,
-# I have to cast it (back?) to int manually in the code
 @dataclass(slots=True)
 class ParticleBatch:
     particles: torch.Tensor

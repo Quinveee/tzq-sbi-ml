@@ -1,7 +1,15 @@
+"""
+Normalizer classes for both equivariant and non-equivariant architectures
+"""
+
 import numpy as np
 
 
 class Normalizer:
+    """
+    Normalizer class
+    """
+
     def fit(self, X):
         self.mean = np.nanmean(X, axis=0)
         self.std = np.nanstd(X, axis=0)
@@ -16,6 +24,11 @@ class Normalizer:
 
 
 class EquivariantNormalizer:
+    """
+    Equivariant (wrt to Lorentz) normalizer
+    matching LGATr implementations
+    """
+
     def fit(self, X):
         self.std = np.nanstd(X)
 
@@ -28,6 +41,5 @@ class EquivariantNormalizer:
 
 
 def get_normalizer(model_name):
-    if model_name == "lgatr":
-        return EquivariantNormalizer()
-    return Normalizer()
+    model2nom = {"lgatr": EquivariantNormalizer()}
+    return model2nom.get(model_name, Normalizer())

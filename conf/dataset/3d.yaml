@@ -1,3 +1,6 @@
+# Dataset for the three-dimensional study
+# Full path will depend on whether we are doing 'particles' or 'features'
+# so derive dynamically
 defaults:
   - _base
 

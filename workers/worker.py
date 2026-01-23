@@ -1,3 +1,5 @@
+"""Contains the main worker function to run all experiments."""
+
 from __future__ import annotations
 
 import sys
@@ -9,9 +11,18 @@ from omegaconf import OmegaConf
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
+# The worker spawns a new python process, so any needed resolvers from now on
+# must be registerd here (doing that in main.py won't work)
 OmegaConf.register_new_resolver("sum", lambda x, y: x + y)
 
-def run(cfg: DictConfig):
+
+def run(cfg: DictConfig) -> None:
+    """
+    Worker function.
+
+    :param cfg: Final configuration object for the experiment
+    :type cfg: DictConfig
+    """
     print(
         f"exp={cfg.exp.key} model={cfg.model.key} dataset={cfg.dataset.key} run={cfg.data.run}"
     )
