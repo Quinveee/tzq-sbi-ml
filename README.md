@@ -8,7 +8,7 @@ To install dependencies in a virtual environment, do
 ```bash
 cd tzq-sbi-ml
 python3 -m venv .venv && source .venv/bin/activate
-python -m pip install -r requirements
+python -m pip install -r requirements.txt
 ```
 
 You can optionally download the paper datasets for reproduction or testing from [Google Drive](https://drive.google.com/file/d/1LLmCnUtkik1bB7CngY-CkDLROsnnIFKh/view?usp=sharing).
@@ -25,6 +25,8 @@ You can edit the default configurations just overriding them from the CL like
 ```bash
 python main.py exp=local model=lgatr dataset=3d train.epochs=25 devices.device=cpu
 ```
+By default, we assume GPU availability. Set the flag `devices.device=cpu` or edit `conf/config.py` as above if this is not the case.
+You also want to check that `devices.eval=cpu` is set.
 
 ## Multirun
 Hydra makes it easy to run several experiments with different configuration overrides. Just pass the multirun flag `-m` or `--multirun` and use commas to separate values. For example
