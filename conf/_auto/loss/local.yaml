@@ -1,1 +1,1 @@
-_losses/sally.yaml
+_target_: experiments.losses.SALLY

@@ -1,1 +1,2 @@
-_losses/rolr.yaml
+_target_: experiments.losses.ROLR
+log_r_clip: 10.0
