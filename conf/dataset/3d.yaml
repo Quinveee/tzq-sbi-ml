@@ -5,6 +5,6 @@ defaults:
   - _base
 
 key: 3d
-base: data/atlas/users/qvanenge/experiment_so_cht_ctw_ctb
+base: /data/atlas/users/qvanenge/experiment_so_cht_ctw_ctb
 events_file: ${.path}/experiment_so_cht_ctw_ctb.h5
 theta_dim: 3

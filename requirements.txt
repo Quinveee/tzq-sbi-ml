@@ -8,3 +8,4 @@ tqdm
 torch_geometric
 lgatr
 htcondor
+texlive-core

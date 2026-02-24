@@ -13,7 +13,7 @@ from matplotlib.lines import Line2D
 from ..logger import LOGGER as _LOGGER
 
 mh.style.use("ATLAS")
-plt.rcParams["text.usetex"] = True
+plt.rcParams["text.usetex"] = False
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["font.size"] = 15
 
