@@ -1,5 +1,5 @@
 # 3D grid
 theta_ranges: [ [-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0] ]
-resolutions: [9, 9, 9]
+resolutions: [21, 21, 21] # acturo [9, 9, 9]
 asimov: 
   theta_true: [0.0, 0.0, 0.0]

@@ -10,7 +10,7 @@ description:
   # This below will allow us to use the same Python interpreter we are using in the Acess Point in the
   # Working Node. Also, we modify the PYTHONPATH to make our files accesible from Python code from the 
   # Working Node. See `scripts/run.sh`
-  environment: ENV=${env:prefix};PYTHONPATH=${env:cwd} 
+  environment: ENV=${env:prefix};PYTHONPATH=${env:cwd};WANDB_API_KEY=${env:WANDB_API_KEY}
   output: logs/$(Cluster).$(Process).out
   log: logs/$(Cluster).$(Process).log
   error: logs/$(Cluster).$(Process).err

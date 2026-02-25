@@ -6,6 +6,7 @@ outputs/
 inputs/
 logs/
 wandb_key.yaml
+nohup.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
