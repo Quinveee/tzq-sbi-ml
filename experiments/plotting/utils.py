@@ -36,6 +36,7 @@ def plot_llr(
     conf_levels=(0.68, 0.95),
     to=None,
     mode: Literal["average", "slice", "mle"] = "average",
+    plot_marginals: bool = True,
 ) -> None:
     """
     Plot N-dimensional contours of the LLR
@@ -174,6 +175,117 @@ def plot_llr(
     if to is not None:
         fig.savefig(
             Path(to).with_stem(f"{Path(to).stem}_" + "_".join(param_names)), dpi=300
+        )
+    plt.close(fig)
+
+    if plot_marginals and N >= 2:
+        _plot_marginals(
+            llr_list=llr_list,
+            grid=grid,
+            param_names=param_names,
+            ranges=ranges,
+            resolutions=resolutions,
+            labels=labels,
+            colors=colors,
+            linestyles=linestyles,
+            conf_levels=conf_levels,
+            mode=mode,
+            to=to,
+        )
+
+
+def _plot_marginals(
+    *,
+    llr_list: List[np.ndarray],
+    grid: np.ndarray,
+    param_names: List[str],
+    ranges: List[Tuple[float, float]],
+    resolutions: List[int],
+    labels: List[str],
+    colors=None,
+    linestyles=None,
+    conf_levels=(0.68, 0.95),
+    mode: Literal["average", "slice", "mle"] = "average",
+    to=None,
+) -> None:
+    """
+    Plot 1D marginal profile LLR curves for each parameter, profiling/averaging
+    over all other dimensions.
+    """
+    N = grid.shape[1]
+
+    if colors is None:
+        colors = plt.cm.tab10.colors[: len(llr_list)]
+    if linestyles is None:
+        linestyles = ["-", "--", "-.", ":"] * ((len(llr_list) // 4) + 1)
+
+    chi2_levels_1d = [stats.chi2.ppf(p, 1) for p in conf_levels]
+
+    ncols = min(3, N)
+    nrows = int(np.ceil(N / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+    axes = np.atleast_1d(axes).flatten()
+
+    handles = [
+        mlines.Line2D([], [], color=c, linestyle=ls, linewidth=2, label=lab)
+        for c, ls, lab in zip(colors, linestyles, labels)
+    ]
+
+    for ax, i in zip(axes, range(N)):
+        others = tuple(k for k in range(N) if k != i)
+        xi = np.unique(grid[:, i])
+        x_range = ranges[i]
+
+        for llr, color, ls in zip(llr_list, colors, linestyles):
+            values_nd = -2 * llr.reshape(resolutions)
+
+            if mode == "mle":
+                profile = values_nd.min(axis=others)
+            elif mode == "average":
+                profile = values_nd.mean(axis=others)
+            elif mode == "slice":
+                slicer = [resolutions[k] // 2 if k in others else slice(None) for k in range(N)]
+                profile = values_nd[tuple(slicer)]
+            else:
+                raise ValueError("mode must be 'average', 'slice', or 'mle'")
+
+            profile = profile - profile.min()
+            ax.plot(xi, profile, color=color, linestyle=ls, linewidth=2)
+
+        # Confidence level lines
+        for lvl, chi2_val in zip(conf_levels, chi2_levels_1d):
+            ax.axhline(chi2_val, color="grey", linestyle="--", alpha=0.5, linewidth=1)
+            ax.text(
+                x_range[-1] - 0.05 * (x_range[-1] - x_range[0]),
+                chi2_val + 0.3,
+                f"{int(lvl * 100)}\\% CI",
+                color="grey",
+                ha="right",
+                fontsize=12,
+            )
+
+        ax.set_xlabel(PARAM2LABEL.get(param_names[i], param_names[i]))
+        ax.set_ylabel(r"$-2\log\Lambda$")
+        ax.set_xlim(x_range)
+        ax.set_ylim(0, max(chi2_levels_1d[-1] * 1.5, 5))
+
+    # Hide unused axes
+    for ax in axes[N:]:
+        ax.set_visible(False)
+
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        ncol=len(labels),
+        frameon=False,
+        fontsize=16,
+    )
+    fig.suptitle("Marginal profile likelihood", fontsize=18, y=1.01)
+    fig.tight_layout()
+
+    if to is not None:
+        fig.savefig(
+            Path(to).with_stem(f"{Path(to).stem}_marginals"), dpi=300
         )
     plt.close(fig)
 

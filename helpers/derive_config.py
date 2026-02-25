@@ -80,6 +80,14 @@ def derive_config(cfg: DictConfig) -> DictConfig:
     if loss_path.exists():
         cfg.merge_with(load_conf_from(loss_path, merge_on="loss"))
 
+    # Allow model yamls to override global train params by defining a `train:` block.
+    # Model-specific values take precedence over the defaults in config.yaml.
+    # The `train` key is then removed from cfg.model so it isn't passed as a
+    # kwarg to the wrapper constructor during instantiation.
+    if "train" in cfg.model:
+        cfg.train = OmegaConf.merge(cfg.train, cfg.model.train)
+        del cfg.model.train
+
     OmegaConf.set_struct(cfg, True)
 
     return cfg

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Dict, Literal, Optional, Tuple
 import numpy as np
 import torch
 import wandb
-import yaml
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, random_split
@@ -25,16 +24,6 @@ from ..utils import device, dtype
 from .base_experiment import BaseExperiment
 from .normalizers import get_normalizer
 from .schemas import Losses
-
-# WandB login - add `wandb_key.yaml` to `.gitignore` and create it with the following content:
-# wandb:
-#   api_key: "your_api_key_here"
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file)
-
-api_key = config["wandb"]["api_key"]
-
-wandb.login(key=api_key)
 
 if TYPE_CHECKING:
 
@@ -234,6 +223,7 @@ class BaseExperimentML(BaseExperiment):
         writer = SummaryWriter(log_dir="runs/model_experiment")
 
         # Weights & Biases
+        wandb.login()  # reads WANDB_API_KEY env var automatically
         wandb.init(
             project="tzq-sbi-ml",
             name=f"{self.cfg.dataset.key}/{self.cfg.exp.key}/{self.cfg.model.key}/run{self.cfg.data.run}",
@@ -262,6 +252,14 @@ class BaseExperimentML(BaseExperiment):
 
                 # Calculate loss on output
                 loss = self.loss(batch)
+
+                # check loss for NaNs or infs before backward pass
+                if not torch.isfinite(loss):
+                    LOGGER.warning(
+                        f"Non-finite loss detected at epoch {e+1}, global step {global_step}. Skipping backward pass and optimizer step for this batch."
+                    )
+                    opt.zero_grad()  # Clear any existing gradients
+                    continue
 
                 # Backward pass
                 loss.backward()

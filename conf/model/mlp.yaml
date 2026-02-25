@@ -3,6 +3,7 @@ defaults:
   - _self_
 
 key: mlp
+
 net:
   _target_: models.mlp.MLP
   n_observables: 33
@@ -11,3 +12,13 @@ net:
   activation: gelu
   dropout: ${train.dropout}
   dim_out: ... # Dynamically derived
+
+train:
+  lr: 2e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
+  epochs: 1 # arcturo used 10
+  dropout: 0.1
+  lr_warmup: 50
+  batch_size: 256 # arcturo used 50
+  clip_grad_norm: 1
+  validation_split: 0.2
+  clamp_samples: null
