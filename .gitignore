@@ -5,6 +5,7 @@ run_dirs/
 outputs/
 inputs/
 logs/
+wandb_key.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

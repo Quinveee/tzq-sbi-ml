@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Dict, Literal, Optional, Tuple
 import numpy as np
 import torch
 import wandb
+import yaml
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, random_split
@@ -24,6 +25,16 @@ from ..utils import device, dtype
 from .base_experiment import BaseExperiment
 from .normalizers import get_normalizer
 from .schemas import Losses
+
+# WandB login - add `wandb_key.yaml` to `.gitignore` and create it with the following content:
+# wandb:
+#   api_key: "your_api_key_here"
+with open("config.yaml", "r") as file:
+    config = yaml.safe_load(file)
+
+api_key = config["wandb"]["api_key"]
+
+wandb.login(key=api_key)
 
 if TYPE_CHECKING:
 
@@ -150,16 +161,32 @@ class BaseExperimentML(BaseExperiment):
         Create torch loaders for the different splits
 
         """
-        factory_kwds = {
-            "batch_size": self.cfg.train.batch_size,
-            "pin_memory": self.cfg.devices.pin_memory,
-            "shuffle": True,
-            "collate_fn": self.collate_fn,
-            "num_workers": 0,
-        }
-        self.train_loader = DataLoader(self.train_dataset, **factory_kwds)
-        self.val_loader = DataLoader(self.val_dataset, **factory_kwds)
-        self.test_loader = DataLoader(self.test_dataset, **factory_kwds)
+        self.train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=self.cfg.train.batch_size,
+            shuffle=True,
+            pin_memory=self.cfg.devices.pin_memory,
+            collate_fn=self.collate_fn,
+            num_workers=0,
+        )
+
+        self.val_loader = DataLoader(
+            self.val_dataset,
+            batch_size=self.cfg.train.batch_size,
+            shuffle=False,   # no need to shuffle validation data
+            pin_memory=self.cfg.devices.pin_memory,
+            collate_fn=self.collate_fn,
+            num_workers=0,
+        )
+
+        self.test_loader = DataLoader(
+            self.test_dataset,
+            batch_size=self.cfg.train.batch_size,
+            shuffle=False,   # no need to shuffle test data
+            pin_memory=self.cfg.devices.pin_memory,
+            collate_fn=self.collate_fn,
+            num_workers=0,
+        )
 
     def init_model(self) -> None:
         """
@@ -239,15 +266,17 @@ class BaseExperimentML(BaseExperiment):
                 # Backward pass
                 loss.backward()
 
-                # Optimizer step
-                opt.step()
-
                 # Gradient clipping (can be `null` or not appear in config)
                 max_norm = self.cfg.train.get("clip_grad_norm", float("inf"))
                 max_norm = max_norm if max_norm is not None else float("inf")
                 torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), max_norm=max_norm, error_if_nonfinite=False
+                    self.model.parameters(), 
+                    max_norm=max_norm, 
+                    error_if_nonfinite=False
                 )
+
+                # Optimizer step
+                opt.step()
 
                 train_loss += loss.item()
                 global_step += 1
