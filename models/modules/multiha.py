@@ -41,13 +41,13 @@ class MultiHA(nn.Module):
 
         query = query.unflatten(
             -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1)
+        ).transpose(0, 1).contiguous()
         key = key.unflatten(
             -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1)
+        ).transpose(0, 1).contiguous()
         value = value.unflatten(
             -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1)
+        ).transpose(0, 1).contiguous()
 
         assert (
             query.size()

@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Dict, Literal, Optional, Tuple
 
 import numpy as np
 import torch
+import wandb
 from hydra.utils import instantiate
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -204,6 +206,14 @@ class BaseExperimentML(BaseExperiment):
         # TensorBoard
         writer = SummaryWriter(log_dir="runs/model_experiment")
 
+        # Weights & Biases
+        wandb.init(
+            project="tzq-sbi-ml",
+            name=f"{self.cfg.dataset.key}/{self.cfg.exp.key}/{self.cfg.model.key}/run{self.cfg.data.run}",
+            config=OmegaConf.to_container(self.cfg, resolve=False),
+            dir="runs/",
+        )
+
         # Training loop
         global_step = 0
 
@@ -242,9 +252,10 @@ class BaseExperimentML(BaseExperiment):
                 train_loss += loss.item()
                 global_step += 1
 
-                # log batch loss to TensorBoard
+                # log batch loss to TensorBoard and wandb
                 writer.add_scalar("Loss/batch", loss.item(), global_step)
                 writer.add_scalar("LR", opt.param_groups[0]["lr"], global_step)
+                wandb.log({"loss/batch": loss.item(), "lr": opt.param_groups[0]["lr"]}, step=global_step)
 
                 # Update progress bar
                 pbar.set_postfix(
@@ -260,8 +271,9 @@ class BaseExperimentML(BaseExperiment):
                 f"Epoch {e+1}/{self.cfg.train.epochs} - train loss: {avg_train_loss:.4f}"
             )
 
-            # log epoch loss to TensorBoard
+            # log epoch loss to TensorBoard and wandb
             writer.add_scalar("Loss/train_epoch", avg_train_loss, e + 1)
+            wandb.log({"loss/train_epoch": avg_train_loss}, step=global_step)
             train_losses.append(avg_train_loss)
 
             # Validation
@@ -279,9 +291,11 @@ class BaseExperimentML(BaseExperiment):
             avg_val_loss = val_loss / len(self.val_loader)
             print(f"Epoch {e+1}/{self.cfg.train.epochs} - val loss: {avg_val_loss:.4f}")
             writer.add_scalar("Loss/val_epoch", avg_val_loss, e + 1)
+            wandb.log({"loss/val_epoch": avg_val_loss}, step=global_step)
             val_losses.append(avg_val_loss)
 
         writer.close()
+        wandb.finish()
 
         return self.model.state_dict(), Losses(train=train_losses, val=val_losses)
 

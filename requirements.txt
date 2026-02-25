@@ -3,9 +3,10 @@ hydra-core
 matplotlib
 mplhep
 git+https://github.com/arturoam00/madminer.git
-tensorboard
 tqdm
 torch_geometric
 lgatr
 htcondor
-texlive-core
+setuptools==80.9.0
+tensorboard
+wandb
