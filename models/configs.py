@@ -23,8 +23,8 @@ class MLPConfig(_BaseConfig):
 
     k_factor: int
     activation: str
-    dim_in: int = 0  # arbitrary as it's overridden with dataclasses.replace() after construction
-    dim_out: int = 0  # arbitrary as it's overridden with dataclasses.replace() after construction
+    dim_in: int | None = None
+    dim_out: int | None = None
     n_hidden: int = 2
     bias: bool = True
     dropout_p: Optional[float] = None
@@ -34,7 +34,7 @@ class MLPConfig(_BaseConfig):
 class SAConfig(_BaseConfig):
     """Self Attention module configuration class"""
 
-    emb_size: int = 0  # arbitrary as it's overridden with dataclasses.replace() after construction
+    emb_size: int | None = None
     num_heads: int = 8
     bias: bool = True
     dropout_p: Optional[float] = None

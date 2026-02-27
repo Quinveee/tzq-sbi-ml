@@ -27,46 +27,50 @@ class MultiHA(nn.Module):
 
     def forward(self, x: torch.Tensor, **attn_kwds):
         """
-        We flatten batch and sequence length dimensions and use an attn matrix
-        to separate particles belonging to different events
+        Multi-head attention forward pass, safe for 2D (batch, emb_size) input.
+        If input has no sequence dimension, we add one. Our framework assumes
+        the input to be (batch, emb_size).
         """
-        b, e = x.size()
+
+        # If input is 2D, add a fake sequence dimension
+        if x.dim() == 2:
+            # x: (batch, emb_size) -> (batch, seq_len=1, emb_size)
+            x = x.unsqueeze(1)
+
+        print(x.size())
+        b, s, e = x.size()  # batch, seq_len, emb_size
 
         assert (
             e == self.config.emb_size
-        ), f"Embedding size doesn't match: found: {e}, expected: {self.config.emb_size}"
+        ), f"Embedding size doesn't match: found {e}, expected {self.config.emb_size}"
 
-        result = self.packed_proj(x)
-        query, key, value = torch.chunk(result, 3, dim=-1)
+        # Linear projections for Q, K, V
+        result = self.packed_proj(x)  # (batch, seq_len, 3*emb_size)
+        query, key, value = torch.chunk(result, 3, dim=-1)  # each: (batch, seq_len, emb_size)
 
-        query = query.unflatten(
-            -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1).contiguous()
-        key = key.unflatten(
-            -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1).contiguous()
-        value = value.unflatten(
-            -1, [self.config.num_heads, self.config.emb_head]
-        ).transpose(0, 1).contiguous()
+        # Split heads: (batch, seq_len, emb_size) -> (batch, seq_len, num_heads, head_dim)
+        H = self.config.num_heads
+        D = self.config.emb_head  # emb_size // num_heads
+        query = query.view(b, s, H, D).transpose(1, 2).contiguous()  # (batch, heads, seq_len, head_dim)
+        key   = key.view(b, s, H, D).transpose(1, 2).contiguous()
+        value = value.view(b, s, H, D).transpose(1, 2).contiguous()
 
-        assert (
-            query.size()
-            == key.size()
-            == value.size()
-            == (self.config.num_heads, b, self.config.emb_head)
-        )
+        # Attention: (batch, heads, seq_len, head_dim)
+        out = F.scaled_dot_product_attention(query, key, value, dropout_p=self.config.dropout_p)
 
-        out = F.scaled_dot_product_attention(
-            query, key, value, dropout_p=self.config.dropout_p, **attn_kwds
-        )
+        # This implementation uses attention masking which does not make sense to use when the sequence length is 1:
+        # out = F.scaled_dot_product_attention(
+        #     query, key, value, dropout_p=self.config.dropout_p, **attn_kwds
+        # )  # same shape
 
-        out = out.transpose(0, 1).flatten(-2)
+        # Merge heads: (batch, heads, seq_len, head_dim) -> (batch, seq_len, emb_size)
+        out = out.transpose(1, 2).reshape(b, s, e)
 
-        assert out.size() == (b, self.config.emb_size)
+        # If we added a fake sequence dimension, remove it
+        if s == 1:
+            out = out.squeeze(1)  # -> (batch, emb_size)
 
+        # Final linear
         out = self.unify_heads(out)
-
-        if self.dropout is not None:
-            out = self.dropout(out)
 
         return out
