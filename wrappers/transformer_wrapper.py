@@ -35,7 +35,7 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         """
         Forward wrapper for the Transformer
 
-        :param particles: Particles foru momenta
+        :param particles: Particles four momenta
         :type particles: torch.Tensor
         :param ptr: Event pointer
         :type ptr: torch.Tensor
@@ -112,3 +112,63 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         assert tokens.size() == (n, e + theta_dim)
 
         return tokens
+
+
+class LocalTransformerFeaturesWrapper(LocalTransformerWrapper):
+    """Transformer wrapper for feature-level local score regression."""
+
+    @staticmethod
+    def _to_feature_tokens(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Split each event feature vector into one scalar token per feature."""
+        batch_size, n_features = x.shape
+        ptr = torch.arange(
+            0,
+            (batch_size + 1) * n_features,
+            n_features,
+            dtype=torch.long,
+            device=x.device,
+        )
+        tokens = x.reshape(-1, 1)
+        return tokens, ptr
+
+    def forward(self, x: torch.Tensor, force_math: bool = False, embedding_kwargs={}):
+        tokens, ptr = self._to_feature_tokens(x)
+        return super().forward(
+            particles=tokens,
+            ptr=ptr,
+            force_math=force_math,
+            embedding_kwargs=embedding_kwargs,
+        )
+
+
+class ParametrizedTransformerFeaturesWrapper(ParametrizedTransformerWrapper):
+    """Transformer wrapper for feature-level ratio regression."""
+
+    @staticmethod
+    def _to_feature_tokens(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, n_features = x.shape
+        ptr = torch.arange(
+            0,
+            (batch_size + 1) * n_features,
+            n_features,
+            dtype=torch.long,
+            device=x.device,
+        )
+        tokens = x.reshape(-1, 1)
+        return tokens, ptr
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        theta: torch.Tensor,
+        force_math: bool = False,
+        embedding_kwargs={},
+    ):
+        tokens, ptr = self._to_feature_tokens(x)
+        embedding_kwargs = {"theta": theta, "ptr": ptr, **embedding_kwargs}
+        return super().forward(
+            particles=tokens,
+            ptr=ptr,
+            force_math=force_math,
+            embedding_kwargs=embedding_kwargs,
+        )

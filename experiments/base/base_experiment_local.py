@@ -54,15 +54,15 @@ class BaseExperimentLocal(BaseExperimentML):
         x_train = np.load(source / "x_train_score.npy")[:max_samples]
         x_test = np.load(source / "x_test.npy")
 
-        # Load labels. TODO: Load test labels
+        # Load train/test labels
         score_train = np.load(source / "t_xz_train_score.npy")[:max_samples]
-        dummy_scores = np.zeros((len(x_test), self.cfg.dataset.theta_dim))
+        score_test = np.load(source / "t_xz_test_score.npy")
 
         return RawData(
             x_train=x_train,
             score_train=score_train,
             x_test=x_test,
-            score_test=dummy_scores,
+            score_test=score_test,
         )
 
     def _load_dataset(

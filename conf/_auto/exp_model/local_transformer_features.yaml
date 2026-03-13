@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.features.local.ExperimentLocalFeatures
+model:
+  _target_: wrappers.transformer_wrapper.LocalTransformerFeaturesWrapper
+  net:
+    dim_in: 1
+    dim_out: ${dataset.theta_dim}

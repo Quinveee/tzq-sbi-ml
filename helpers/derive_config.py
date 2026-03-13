@@ -65,14 +65,34 @@ def derive_config(cfg: DictConfig) -> DictConfig:
     # For example, experiment=local and model=lgatr
     # will correspond to ExperimentLocalParticles and LocalLGATrWrapper
     model_key = cfg.model.key if cfg.model.key else "noop"
-    cfg.merge_with(
-        load_conf_from(auto_dir / "exp_model" / f"{cfg.exp.key}_{model_key}")
-    )
 
-    # Load the right dataset corresponding to model type
-    # MLP and histos models will need the 'features' datasets while
-    # LGATr and Transformer will need the 'particles' datasets
-    cfg.merge_with(load_conf_from(auto_dir / "dataset" / model_key, merge_on="dataset"))
+    # Transformer can optionally consume feature-level data instead of particles.
+    # We keep backwards compatibility by defaulting to particles when unset.
+    transformer_input = "particles"
+    if model_key == "transformer":
+        transformer_input = cfg.model.get("input_level", "particles")
+        assert transformer_input in (
+            "particles",
+            "features",
+        ), f"Invalid transformer input_level={transformer_input}"
+        # This flag is only used to derive auto-config choices and should not
+        # be passed to the wrapper constructor.
+        if "input_level" in cfg.model:
+            del cfg.model.input_level
+
+    exp_model_key = f"{cfg.exp.key}_{model_key}"
+    if model_key == "transformer" and transformer_input == "features":
+        exp_model_key = f"{exp_model_key}_features"
+
+    cfg.merge_with(load_conf_from(auto_dir / "exp_model" / exp_model_key))
+
+    # Load the right dataset corresponding to model type.
+    # MLP and histos models use feature-level inputs while LGATr and
+    # Transformer use particles by default.
+    dataset_key = model_key
+    if model_key == "transformer" and transformer_input == "features":
+        dataset_key = "transformer_features"
+    cfg.merge_with(load_conf_from(auto_dir / "dataset" / dataset_key, merge_on="dataset"))
 
     # We use fixed loss functions for either LLR regression or Score regression
     # You can change them changing the symlinks in `conf/_auto/loss`

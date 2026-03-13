@@ -3,6 +3,7 @@ defaults:
   - _self_
 
 key: transformer
+input_level: particles # particles|features
 
 net:
   _target_: models.transformer.Transformer

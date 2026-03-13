@@ -33,7 +33,7 @@ def att_mask(index: torch.Tensor) -> torch.Tensor:
     :return: Block diagonal masking matrix
     :rtype: Tensor
     """
-    return (index.unsqueeze(0) == index.unsqueeze(1)).to(index.device)
+    return (index.unsqueeze(0) == index.unsqueeze(1)).to(torch.bool)
 
 
 def get_backends(force_math: bool = False):

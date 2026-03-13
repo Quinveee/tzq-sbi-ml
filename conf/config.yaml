@@ -27,6 +27,7 @@ modes:
   eval: true
   plot: true
   recycle: false
+  wandb: false
 
 data:
   run: 1
