@@ -48,7 +48,8 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         """
         backends = get_backends(force_math)
 
-        index = ptr2index(ptr)
+        # Transfomer already implements a version akin to tokens, so we use 'channels' as default mode 
+        index = ptr2index(ptr, mode="channels", theta_dim=embedding_kwargs.get("theta_dim", 0))
         attention_mask = att_mask(index)
 
         # Delegate embedding to subclasses

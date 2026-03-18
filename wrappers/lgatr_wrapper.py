@@ -26,9 +26,10 @@ if TYPE_CHECKING:
 class BaseLGATrWrapper(BaseWrapper, ABC):
     """Base LGATr wrapper"""
 
-    def __init__(self, *args, **kwds) -> None:
+    def __init__(self, *args, mode: Literal["tokens", "channels"] = "channels", **kwds) -> None:
         kwds["key"] = "LGATr"
         super().__init__(*args, **kwds)
+        self.mode = mode
         self.net = self.init_net(self.net)
 
     @filter_empty_tensor_warning
@@ -57,7 +58,7 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
         ptr: Tensor,
         scalars: Optional[Tensor] = None,
         force_math: bool = False,
-        embedding_kwargs: Dict = {},
+        embedding_kwargs: Optional[Dict] = None,
     ) -> Tensor:
         """
         Forward for any LGATr wrapper. Let subclasses decide how to embed
@@ -82,8 +83,16 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
         # parameters I cannot use efficient backends for self attention
         backends = get_backends(force_math)
 
+        if embedding_kwargs is None:
+            embedding_kwargs = {}
+        else:
+            embedding_kwargs = dict(embedding_kwargs)
+
+        mode = embedding_kwargs.get("mode", self.mode)
+        theta_dim = embedding_kwargs.get("theta_dim", 0)
+
         # Create masking matrix for self-attention
-        index = ptr2index(ptr)
+        index = ptr2index(ptr, mode=mode, theta_dim=theta_dim)
         attention_mask = att_mask(index)
 
         # Embed fourmomenta
@@ -101,7 +110,7 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
 
 class LocalLGATrWrapper(BaseLGATrWrapper):
 
-    def embed_mv(self, particles: Tensor, theta_dim: int) -> Tensor:
+    def embed_mv(self, particles: Tensor, theta_dim: int, **kwargs) -> Tensor:
         """
         For the local experiment, just repeat the embedded multivector
         `theta_dim` times along the multivector channel dimension
@@ -150,6 +159,7 @@ class ParametrizedLGATrWrapper(BaseLGATrWrapper):
         theta: Tensor,
         ptr: Tensor,
         mode: Literal["tokens", "channels"],
+        **kwargs,
     ) -> Tensor:
         """
         Embed the particles' fourmomenta in multivectors and parametrize those

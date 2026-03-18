@@ -61,10 +61,10 @@ class BaseExperimentRatios(BaseExperimentML):
         x_test = np.load(source / "x_test.npy")
         theta_test = np.load(source / "theta_test.npy")
 
-        # Load test labels TODO: Augment test data (i just put dummy data now)!
-        ratio_test = np.zeros((x_test.shape[0], ratio_train.shape[1]))
-        score_test = np.zeros((x_test.shape[0], score_train.shape[1]))
-        labels_test = np.zeros((x_test.shape[0], labels_train.shape[1]))
+        # Load test labels 
+        ratio_test = np.load(source / "r_xz_test_ratio.npy")
+        score_test = np.load(source / "t_xz_test_ratio.npy")
+        labels_test = np.load(source / "y_test_ratio.npy")
 
         return ParametrizedRawData(
             x_train=x_train,

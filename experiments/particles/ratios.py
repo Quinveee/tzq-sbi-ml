@@ -26,7 +26,11 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         """
         # To later compute score based on regressed log-likelihood ratio
         batch.theta.requires_grad_(self.loss_fn.REQUIRES_SCORE)
-        embedding_kwargs = {"theta": batch.theta, "ptr": batch.ptr, "mode": "channels"}
+        embedding_kwargs = {
+            "theta": batch.theta,
+            "ptr": batch.ptr,
+            "mode": self.cfg.model.get("mode", "channels"),
+        }
 
         # Regress log-likelihood ratio
         log_ratio_pred = self.model(

@@ -1,10 +1,12 @@
 """Helper functions"""
 
+from typing import Literal
+
 import torch
 from torch.nn.attention import SDPBackend
 
 
-def ptr2index(ptr: torch.Tensor) -> torch.Tensor:
+def ptr2index(ptr: torch.Tensor, mode: Literal["tokens","channels"], theta_dim: int = 0):
     """
     Turns pointer object into repeated indices for each event
 
@@ -16,9 +18,24 @@ def ptr2index(ptr: torch.Tensor) -> torch.Tensor:
     :rtype: Tensor
     """
     ptr = ptr.to(dtype=torch.long)
-    return torch.arange(len(ptr) - 1, device=ptr.device).repeat_interleave(
-        ptr[1:] - ptr[:-1]
-    )
+    num_events = len(ptr) - 1
+
+    if mode == "channels":
+
+        return torch.arange(num_events, device=ptr.device).repeat_interleave(
+            ptr[1:] - ptr[:-1]
+        )
+
+    elif mode == "tokens":
+        particles_per_event = ptr[1:] - ptr[:-1]
+        tokens_per_event = particles_per_event + theta_dim
+
+        return torch.arange(num_events, device=ptr.device).repeat_interleave(
+            tokens_per_event
+        )
+
+    else:
+        raise ValueError(f"Invalid mode {mode}")
 
 
 def att_mask(index: torch.Tensor) -> torch.Tensor:

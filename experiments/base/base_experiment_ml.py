@@ -232,6 +232,7 @@ class BaseExperimentML(BaseExperiment):
                 config=OmegaConf.to_container(self.cfg, resolve=False),
                 dir="runs/",
             )
+            wandb.summary["n_parameters"] = sum(p.numel() for p in self.model.parameters())
 
         # Training loop
         global_step = 0

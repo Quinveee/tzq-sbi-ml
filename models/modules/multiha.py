@@ -21,11 +21,12 @@ class MultiHA(nn.Module):
         self.unify_heads = nn.Linear(config.emb_size, config.emb_size, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout_p) if config.dropout_p else None
 
-    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor | None = None, **kwargs):
+    def forward(self, x: torch.Tensor, lloca: bool = False, attn_mask: torch.Tensor | None = None, **kwargs):
         """
         x: (batch*particles, emb_size) -> emb_size obtained from embedding layer which converted 
             the input four-momenta + wilson coefficients into the embedding dimension
         attn_mask: optional attention mask of shape (batch*particles, batch*particles)
+        lloca: whether to use lorentz equivariant attention for lloca or standard multi-head attention
         """
         b, e = x.size()
 
@@ -54,6 +55,7 @@ class MultiHA(nn.Module):
             .contiguous()
         )
 
+        # confirm shapes: (N_heads, batch*particles, emb_head)
         assert (
             query.size()
             == key.size()
@@ -69,15 +71,19 @@ class MultiHA(nn.Module):
             elif attn_mask.dim() != 3:
                 raise ValueError(f"attn_mask must be 2D or 3D, got {attn_mask.shape}")
 
-        # Scaled dot-product attention with optional attn mask and dropout
-        out = F.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=attn_mask,
-            dropout_p=self.config.dropout_p if self.training else 0.0,
-            **kwargs
-        )
+        if lloca:            
+            pass
+
+        else: 
+            # Scaled dot-product attention with optional attn mask and dropout
+            out = F.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=attn_mask,
+                dropout_p=self.config.dropout_p if self.training else 0.0,
+                **kwargs
+            )
 
         # Merge heads: (N_heads, batch*particles, emb_head) -> (batch*particles, emb_size)
         out = out.transpose(0, 1).flatten(-2)
