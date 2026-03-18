@@ -22,6 +22,14 @@ def minkowski_dot(a: torch.Tensor, b: torch.Tensor, eps: float = 0.0) -> torch.T
     return (a * b * sign).sum(-1)
 
 
+def minkowski_norm_sq(a: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Returns signed norm squared.
+    """
+    norm = minkowski_dot(a, a)
+    return torch.where(norm.abs() < eps, torch.sign(norm) * eps, norm)
+
+
 def pseudorapidity(p: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """η  from four-momentum (E, px, py, pz)."""
     pz = p[..., 3]
@@ -43,16 +51,35 @@ def _gram_schmidt_minkowski(vecs: torch.Tensor, eps: float = 1e-8) -> torch.Tens
     returns : (N, K, 4)  — orthonormal Lorentz basis vectors
     """
     ortho: list[torch.Tensor] = []
+
     for k in range(vecs.shape[1]):
         v = vecs[:, k].clone()  # (N, 4)
+
         for u in ortho:
             denom = minkowski_dot(u, u).unsqueeze(-1).abs().clamp(min=eps)
             proj = minkowski_dot(v, u).unsqueeze(-1) / denom
             v = v - proj * u
-        norm_sq = minkowski_dot(v, v).abs().clamp(min=eps)
-        v = v / norm_sq.sqrt().unsqueeze(-1)
+
+        norm_sq = minkowski_norm_sq(v, eps).unsqueeze(-1)
+
+        # Normalize while preserving sign structure
+        v = v / torch.sqrt(norm_sq.abs() + eps)  
+        
         ortho.append(v)
+
     return torch.stack(ortho, dim=1)  # (N, K, 4)
+
+
+def pairwise_minkowski_distance_sq(p: torch.Tensor) -> torch.Tensor:
+    """
+    Computes invariant distance:
+        d_ij = -(p_i - p_j)^2
+
+    p: (n, 4)
+    returns: (n, n)
+    """
+    diff = p.unsqueeze(1) - p.unsqueeze(0)
+    return -minkowski_dot(diff, diff)
 
 
 def build_lloca_frames(
@@ -76,28 +103,24 @@ def build_lloca_frames(
 
     for b in range(len(ptr) - 1):
         s, e = int(ptr[b]), int(ptr[b + 1])
+        ep = particles[s:e]  # (n, 4)
         n = e - s
+
         if n == 0:
             continue
-        ep = particles[s:e]  # (n, 4)
 
         # Degenerate case: a single particle has no neighbours
         if n == 1:
             frames[s:e] = ep.unsqueeze(1).expand(-1, K, -1)
             continue
 
-        # ΔR pairwise distances (vectorised within event)
-        eta = pseudorapidity(ep, eps)       # (n,)
-        phi = azimuthal_angle(ep)           # (n,)
-        deta = eta.unsqueeze(0) - eta.unsqueeze(1)   # (n, n)
-        dphi = phi.unsqueeze(0) - phi.unsqueeze(1)
-        dphi = (dphi + torch.pi) % (2.0 * torch.pi) - torch.pi
-        dR2 = deta**2 + dphi**2
-        dR2.fill_diagonal_(float("inf"))    # exclude self
+        # Lorentz-invariant distance matrix:
+        d_ij = pairwise_minkowski_distance_sq(ep)
+        d_ij.fill_diagonal_(float("inf"))
 
         k_use = min(K, n - 1)
-        _, nn_idx = dR2.topk(k_use, dim=1, largest=False)  # (n, k_use)
-        nn_momenta = ep[nn_idx]                             # (n, k_use, 4)
+        _, nn_idx = d_ij.topk(k_use, dim=1, largest=False)
+        nn_momenta = ep[nn_idx] # (n, k_use, 4)
 
         # Pad to exactly K vectors when the event is small
         if k_use < K:
@@ -119,6 +142,7 @@ def lloca_dot_product_attention(
     attn_mask: torch.Tensor | None = None,
     dropout_p: float = 0.0,
     training: bool = True,
+    project_values: bool = False
 ) -> torch.Tensor:
     """
     LLoCa attention score (Eq. from the paper):
@@ -170,7 +194,20 @@ def lloca_dot_product_attention(
         attn = attn.masked_fill(~attn_mask, float("-inf"))
 
     attn_weights = torch.softmax(attn, dim=-1)
+
     if dropout_p > 0.0 and training:
         attn_weights = F.dropout(attn_weights, p=dropout_p)
+
+    # value projection -> turns value vectors into Lorentz scalars by projecting onto the same frames
+    if project_values and n_vectors > 0:
+        v_v = value[..., n_scalars:n_scalars + d_vec].reshape(H, N, n_vectors, 4)
+        frames_exp = frames.unsqueeze(0).unsqueeze(2)
+
+        v_proj = (v_v.unsqueeze(-2) * frames_exp * sign).sum(-1)
+        v_proj = v_proj.reshape(H, N, -1)
+
+        v_s = torch.cat([value[..., :n_scalars], value[..., n_scalars + d_vec:]], dim=-1)
+
+        value = torch.cat([v_s, v_proj], dim=-1)
 
     return torch.bmm(attn_weights, value)  # (H, N, d_head)
