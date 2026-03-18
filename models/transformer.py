@@ -34,18 +34,28 @@ class Transformer(nn.Module):
     """
 
     def __init__(
-        self,
-        dim_in: int,
-        emb_factor: int,
-        dim_out: int,
-        num_blocks: int,
-        attention: Mapping,
-        mlp: Mapping,
-        dropout_p: float,
+    self,
+    dim_in: int,
+    emb_factor: int,
+    dim_out: int,
+    num_blocks: int,
+    attention: Mapping,
+    mlp: Mapping,
+    dropout_p: float,
+    lloca_num_scalars: int = 0,   # ← add
+    lloca_num_vectors: int = 0,   # ← add
     ) -> None:
         super().__init__()
-
         emb_hidden = derive_emb_hidden(dim_in, emb_factor, attention.num_heads)
+
+        if lloca_num_vectors:
+            emb_head = emb_hidden // attention.num_heads
+            min_head = lloca_num_scalars + lloca_num_vectors * 4
+            assert emb_head >= min_head, (
+                f"LLoCa requires emb_head ({emb_head}) ≥ "
+                f"n_scalars + n_vectorsx4 = {min_head}. "
+                f"Increase emb_factor or reduce LLoCa vector channels."
+            )
 
         # configs
         attention = replace(

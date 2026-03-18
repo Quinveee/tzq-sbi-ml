@@ -48,7 +48,20 @@ def _collate_particles_common(
     return particles, ptr, scores, extras
 
 
-def collate_particles_fn(batch: Iterable[ParticlesEvent]) -> ParticleBatch:
+# TODO: old collate function, to be removed once LLoCa-specific collate path is fully implemented
+def _collate_particles_lloca(
+    batch: Iterable[ParticlesEvent], extra_attrs: Optional[List[str]] = None
+):
+    """
+    LLoCa-specific particle collation path.
+
+    For compatibility with the current wrapper/model interfaces, this currently returns
+    the same flattened representation as the default collate function.
+    """
+    return _collate_particles_common(batch, extra_attrs=extra_attrs)
+
+
+def collate_particles_fn(batch: Iterable[ParticlesEvent], lloca: bool = False) -> ParticleBatch:
     """
     Batch particle fourmomenta, score and pointer objects
 
@@ -57,11 +70,16 @@ def collate_particles_fn(batch: Iterable[ParticlesEvent]) -> ParticleBatch:
     :return: Description
     :rtype: ParticleBatch
     """
-    particles, ptr, score, _ = _collate_particles_common(batch)
+    if lloca:
+        particles, ptr, score, _ = _collate_particles_lloca(batch)
+    else:
+        particles, ptr, score, _ = _collate_particles_common(batch)
     return ParticleBatch(particles=particles, ptr=ptr, score=score)
 
 
-def parametrized_collate_particles_fn(batch: Iterable[ParametrizedParticlesEvent]):
+def parametrized_collate_particles_fn(
+    batch: Iterable[ParametrizedParticlesEvent], lloca: bool = False
+):
     """
     Batch particle fourmomenta, pointer object, score, theory parameters,
     likelihood ratios and labels in each event
@@ -69,9 +87,14 @@ def parametrized_collate_particles_fn(batch: Iterable[ParametrizedParticlesEvent
     :param batch: Description
     :type batch: Iterable[ParametrizedParticlesEvent]
     """
-    particles, ptr, score, extras = _collate_particles_common(
-        batch, extra_attrs=["theta", "ratio", "label"]
-    )
+    if lloca:
+        particles, ptr, score, extras = _collate_particles_lloca(
+            batch, extra_attrs=["theta", "ratio", "label"]
+        )
+    else:
+        particles, ptr, score, extras = _collate_particles_common(
+            batch, extra_attrs=["theta", "ratio", "label"]
+        )
     return ParametrizedParticleBatch(
         particles=particles,
         ptr=ptr,

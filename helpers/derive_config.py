@@ -108,6 +108,18 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         cfg.train = OmegaConf.merge(cfg.train, cfg.model.train)
         del cfg.model.train
 
+    # Derive run_dir model segment based on optional Transformer LLoCa mode.
+    # Keep default folder names unchanged for all other models.
+    run_model_key = model_key
+    if model_key == "transformer":
+        lloca_cfg = cfg.model.get("LLoCa", {})
+        if lloca_cfg.get("active", False):
+            run_model_key = f"{model_key}_lloca"
+
+    cfg.data.run_dir = (
+        f"{cfg.data.run_dir_base}/{cfg.dataset.key}/{cfg.exp.key}/{run_model_key}/{cfg.data.run}"
+    )
+
     OmegaConf.set_struct(cfg, True)
 
     return cfg

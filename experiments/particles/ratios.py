@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 from ..base.base_experiment_ratios import BaseExperimentRatios
@@ -15,6 +16,14 @@ if TYPE_CHECKING:
 class ExperimentRatiosParticles(BaseExperimentRatios):
     dataset_cls = ParametrizedParticleDataset
     collate_fn = staticmethod(parametrized_collate_particles_fn)
+
+    def __init__(self, *args, **kwds):
+        super().__init__(*args, **kwds)
+        lloca_cfg = self.cfg.model.get("LLoCa", {})
+        self.collate_fn = partial(
+            parametrized_collate_particles_fn,
+            lloca=lloca_cfg.get("active", False),
+        )
 
     def _preds(self, batch: ParametrizedParticleBatch):
         """

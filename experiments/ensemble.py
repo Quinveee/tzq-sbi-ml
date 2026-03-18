@@ -212,6 +212,18 @@ class Ensemble:
         self.key = key
         self.checkpoints_from = checkpoints_from
 
+    def _resolve_run_model_dir(self, model_key: str) -> str:
+        """Resolve model directory name used under run_dirs for checkpoints."""
+        if model_key != "transformer":
+            return model_key
+
+        lloca_active = False
+        if self.cfg.model.get("key", None) == "transformer":
+            lloca_cfg = self.cfg.model.get("LLoCa", {})
+            lloca_active = lloca_cfg.get("active", False)
+
+        return "transformer_lloca" if lloca_active else "transformer"
+
     def run(self) -> None:
         """
         Iterate over: experiment, model and run to create merged plots
@@ -249,11 +261,12 @@ class Ensemble:
 
             # Iterate over all runs
             for run in runs:
+                run_model_dir = self._resolve_run_model_dir(model)
                 ckpts_path = Path(
                     self.cfg.data.run_dir_base,
                     self.cfg.dataset.key,
                     exp,
-                    model,
+                    run_model_dir,
                     str(run),
                     self.cfg.data.ckpts,
                 )
@@ -333,11 +346,13 @@ class Ensemble:
             if model_key not in ("transformer", "lgatr"):
                 continue
 
+            run_model_dir = self._resolve_run_model_dir(model_key)
+
             ckpts_path = Path(
                 self.cfg.data.run_dir_base,
                 self.cfg.dataset.key,
                 exp,
-                model_key,
+                run_model_dir,
                 str(runs[0]),
                 self.cfg.data.ckpts,
             )

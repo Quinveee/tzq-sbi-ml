@@ -10,6 +10,7 @@ from torch_geometric.utils import scatter
 
 from .base_wrapper import BaseWrapper
 from .utils import att_mask, get_backends, ptr2index
+from models.modules.lorentz import build_lloca_frames
 
 
 class BaseTransformerWrapper(BaseWrapper, ABC):
@@ -18,6 +19,14 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
     """
 
     def __init__(self, *args, **kwds):
+        # Extract LLoCa configuration before passing to parent
+        lloca_config = kwds.pop("LLoCa", {})
+        self.lloca = lloca_config.get("active", None)
+        self.lloca_frames = lloca_config.get("LLoCa_frames", None)
+        self.lloca_frames_inv = lloca_config.get("LLoCa_frames_inv", None)
+        self.lloca_num_scalars = lloca_config.get("LLoCa_num_scalars", None)
+        self.lloca_num_vectors = lloca_config.get("LLoCa_num_vectors", None)
+        
         kwds["key"] = "Transformer"
         super().__init__(*args, **kwds)
 
@@ -55,9 +64,36 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         # Delegate embedding to subclasses
         tokens = self.embed(particles, **embedding_kwargs)
 
+        # Build attn_kwargs 
+        attn_kwargs = {}
+        if self.lloca is not None:
+            attn_kwargs["lloca"] = self.lloca
+
+            if self.lloca:
+                # Build local Lorentz frames from raw four-momenta (once, not per head)
+                # particles[:, :4] guards against theta-prepended inputs
+                raw_p = particles[:, -4:] if particles.shape[-1] > 4 else particles
+
+                attn_kwargs["frames"] = build_lloca_frames(
+                    raw_p, ptr, K=self.lloca_frames
+                )
+                # Secondary (invariant) frame set — build only when K differs
+                if (
+                    self.lloca_frames_inv is not None
+                    and self.lloca_frames_inv != self.lloca_frames
+                ):
+                    attn_kwargs["frames_inv"] = build_lloca_frames(
+                        raw_p, ptr, K=self.lloca_frames_inv
+                    )
+
+        if self.lloca_num_scalars is not None:
+            attn_kwargs["lloca_num_scalars"] = self.lloca_num_scalars
+        if self.lloca_num_vectors is not None:
+            attn_kwargs["lloca_num_vectors"] = self.lloca_num_vectors
+
         # Just use allowed self-attention backends
         with sdpa_kernel(backends):
-            out = self.net(tokens, attn_mask=attention_mask)
+            out = self.net(tokens, attn_mask=attention_mask, attn_kwargs=attn_kwargs)
 
         # Here `dim=0` represents the particles dimension
         # We "scatter" the resulting batch using the event pointer
