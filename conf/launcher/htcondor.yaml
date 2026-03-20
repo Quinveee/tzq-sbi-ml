@@ -22,6 +22,11 @@ description:
   requirements: 'regexp("V100", TARGET.GPUs_DeviceName)'
   getenv: True
 
+# there are 3 job categories: 
+# express - 10 minutes
+# short - 4 hours
+# medium - 22 hours
+# long - 96 hours
 description_addition:
   +UseOS: '"el9"'
-  +JobCategory: '"short"'
+  +JobCategory: '"long"'

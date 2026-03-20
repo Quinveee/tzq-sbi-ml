@@ -116,6 +116,7 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         if lloca_cfg.get("active", False):
             run_model_key = f"{model_key}_lloca"
 
+    cfg.data.run_model_key = run_model_key
     cfg.data.run_dir = (
         f"{cfg.data.run_dir_base}/{cfg.dataset.key}/{cfg.exp.key}/{run_model_key}/{cfg.data.run}"
     )

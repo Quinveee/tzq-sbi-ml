@@ -108,6 +108,20 @@ class BaseExperimentML(BaseExperiment):
             LOGGER.info(f"Plotting results of experiment {self}")
             self.plot()
 
+    def _resolve_run_model_key(self) -> str:
+        """Resolve model key used for run naming and run-dir conventions."""
+        run_model_key = self.cfg.data.get("run_model_key", None)
+        if run_model_key:
+            return run_model_key
+
+        model_key = self.cfg.model.get("key", "")
+        if model_key == "transformer":
+            lloca_cfg = self.cfg.model.get("LLoCa", {})
+            if lloca_cfg.get("active", False):
+                return "transformer_lloca"
+
+        return model_key
+
     def init_loss_function(self) -> None:
         """
         Instantiate loss from configuration object
@@ -219,19 +233,43 @@ class BaseExperimentML(BaseExperiment):
         opt = torch.optim.Adam(params=self.model.parameters(), lr=self.cfg.train.lr)
         lr_sch = None
 
+        # Optional linear warmup from a small LR to the configured base LR.
+        warmup_epochs = int(self.cfg.train.get("lr_warmup", 0) or 0)
+        if warmup_epochs > 0:
+            warmup_steps = max(1, warmup_epochs * len(self.train_loader))
+            start_factor = 1.0 / warmup_steps
+            lr_sch = torch.optim.lr_scheduler.LinearLR(
+                opt,
+                start_factor=start_factor,
+                end_factor=1.0,
+                total_iters=warmup_steps,
+            )
+            LOGGER.info(
+                "Using linear LR warmup for %d epochs (%d steps)",
+                warmup_epochs,
+                warmup_steps,
+            )
+
         # TensorBoard
         writer = SummaryWriter(log_dir="runs/model_experiment")
 
         # Weights & Biases
         use_wandb = self.cfg.modes.get("wandb", False)
         if use_wandb:
+            run_model_key = self._resolve_run_model_key()
+            run_name = (
+                f"{self.cfg.dataset.key}/{self.cfg.exp.key}/{run_model_key}/run{self.cfg.data.run}"
+            )
             wandb.login()  # reads WANDB_API_KEY env var automatically
             wandb.init(
                 project="tzq-sbi-ml",
-                name=f"{self.cfg.dataset.key}/{self.cfg.exp.key}/{self.cfg.model.key}/run{self.cfg.data.run}",
+                name=run_name,
                 config=OmegaConf.to_container(self.cfg, resolve=False),
                 dir="runs/",
             )
+            if wandb.run is not None:
+                wandb.run.name = run_name
+                wandb.run.save()
             wandb.summary["n_parameters"] = sum(p.numel() for p in self.model.parameters())
 
         # Training loop
@@ -278,6 +316,8 @@ class BaseExperimentML(BaseExperiment):
 
                 # Optimizer step
                 opt.step()
+                if lr_sch is not None:
+                    lr_sch.step()
 
                 train_loss += loss.item()
                 global_step += 1
@@ -292,10 +332,6 @@ class BaseExperimentML(BaseExperiment):
                 pbar.set_postfix(
                     {"batch_loss": loss.item(), "lr": opt.param_groups[0]["lr"]}
                 )
-
-            # Scheduler step
-            if lr_sch is not None:
-                lr_sch.step()
 
             avg_train_loss = train_loss / len(self.train_loader)
             print(
