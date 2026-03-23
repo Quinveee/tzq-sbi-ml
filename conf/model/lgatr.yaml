@@ -20,10 +20,10 @@ net:
   mlp: {}
 
 train:
-  lr: 1e-4 # used in original LGATr paper 
+  lr: 2e-4 # used in original LGATr paper 
   epochs: 100 # arcturo used 10
   dropout: 0.1
-  lr_warmup: 50
+  lr_warmup: 30
   batch_size: 256 # arcturo used 50
   clip_grad_norm: 1
   validation_split: 0.2

@@ -267,9 +267,6 @@ class BaseExperimentML(BaseExperiment):
                 config=OmegaConf.to_container(self.cfg, resolve=False),
                 dir="runs/",
             )
-            if wandb.run is not None:
-                wandb.run.name = run_name
-                wandb.run.save()
             wandb.summary["n_parameters"] = sum(p.numel() for p in self.model.parameters())
 
         # Training loop

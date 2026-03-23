@@ -98,9 +98,7 @@ class MultiHA(nn.Module):
                 frames=frames,
                 n_scalars=lloca_num_scalars,
                 n_vectors=lloca_num_vectors,
-                attn_mask=attn_mask,
-                dropout_p=self.config.dropout_p if self.training else 0.0,
-                training=self.training
+                attn_mask=attn_mask
             )
             # Optional: secondary invariant-frame contribution
             # (frames_inv provides an alternative neighbourhood basis;
@@ -111,9 +109,7 @@ class MultiHA(nn.Module):
                     frames=frames_inv,
                     n_scalars=lloca_num_scalars,
                     n_vectors=lloca_num_vectors,
-                    attn_mask=attn_mask,
-                    dropout_p=self.config.dropout_p if self.training else 0.0,
-                    training=self.training,
+                    attn_mask=attn_mask
                 )
                 out = out * 0.5   # average the two contributions
         else: 

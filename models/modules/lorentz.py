@@ -6,194 +6,195 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-# Minkowski metric (+, -, -, -)
+_MINK_SIGN = torch.tensor([1.0, -1.0, -1.0, -1.0])
+
 _MINK_SIGN = torch.tensor([1.0, -1.0, -1.0, -1.0])
 
 
-def minkowski_dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    sign = _MINK_SIGN.to(device=a.device, dtype=a.dtype)
+def minkowski_dot(a, b):
+    sign = _MINK_SIGN.to(a.device, a.dtype)
     return (a * b * sign).sum(-1)
 
 
-def minkowski_norm_sq(a: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    norm = minkowski_dot(a, a)
-    return torch.where(norm.abs() < eps, torch.sign(norm) * eps, norm)
+def safe_norm_sq(x, eps=1e-6):
+    n = minkowski_dot(x, x)
+    return torch.where(torch.isfinite(n), n, torch.zeros_like(n)).clamp(min=eps)
 
 
-def pseudorapidity(p: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    pz = p[..., 3]
-    pt = p[..., 1:3].norm(dim=-1).clamp(min=eps)
-    p_mag = (pt**2 + pz**2 + eps).sqrt()
-    return 0.5 * torch.log((p_mag + pz + eps) / (p_mag - pz + eps))
+def safe_sqrt(x, eps=1e-6):
+    return torch.sqrt(torch.clamp(x, min=eps))
 
 
-def azimuthal_angle(p: torch.Tensor) -> torch.Tensor:
-    return torch.atan2(p[..., 2], p[..., 1])
-
-
-def _gram_schmidt_minkowski(vecs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+def build_lloca_frames(particles, ptr, K, eps=1e-6):
     """
-    vecs : (N, K, 4)
-    returns : (N, K, 4) — Minkowski-orthonormal basis vectors
+    Batched version of LLoCa frame construction.
+
+    particles: (N, 4)
+    ptr:       (B+1,)
+    returns:   (N, K, 4)
     """
-    ortho: list[torch.Tensor] = []
-    for k in range(vecs.shape[1]):
-        v = vecs[:, k].clone()
-        for u in ortho:
-            denom = minkowski_dot(u, u).unsqueeze(-1).abs().clamp(min=eps)
-            proj = minkowski_dot(v, u).unsqueeze(-1) / denom
-            v = v - proj * u
-        norm_sq = minkowski_norm_sq(v, eps).unsqueeze(-1)
-        v = v / torch.sqrt(norm_sq.abs() + eps)
-        ortho.append(v)
-    return torch.stack(ortho, dim=1)
 
-
-def pairwise_minkowski_distance_sq(p: torch.Tensor) -> torch.Tensor:
-    diff = p.unsqueeze(1) - p.unsqueeze(0)
-    return -minkowski_dot(diff, diff)
-
-
-def build_lloca_frames(
-    particles: torch.Tensor,
-    ptr: torch.Tensor,
-    K: int,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    """
-    Build K local canonical Lorentz frames per particle using K nearest
-    neighbours by Lorentz-invariant distance within the same event.
-
-    particles : (N, 4)
-    ptr       : (B+1,)
-    returns   : (N, K, 4)
-    """
-    N = particles.shape[0]
-    frames = torch.zeros(N, K, 4, device=particles.device, dtype=particles.dtype)
+    device, dtype = particles.device, particles.dtype
     ptr = ptr.long()
 
-    for b in range(len(ptr) - 1):
+    B = len(ptr) - 1
+    lengths = ptr[1:] - ptr[:-1]
+    max_n = int(lengths.max().item())
+    N = particles.shape[0]
+
+    # ── 1. pack into padded tensor ────────────────────────
+    padded = torch.zeros(B, max_n, 4, device=device, dtype=dtype)
+    mask = torch.zeros(B, max_n, dtype=torch.bool, device=device)
+
+    for b in range(B):
         s, e = int(ptr[b]), int(ptr[b + 1])
-        ep = particles[s:e]
-        n = e - s
+        padded[b, :e - s] = particles[s:e]
+        mask[b, :e - s] = True
 
-        if n == 0:
-            continue
-        if n == 1:
-            frames[s:e] = ep.unsqueeze(1).expand(-1, K, -1)
-            continue
+    # ── 2. build frames tensor ────────────────────────────
+    frames = torch.zeros(B, max_n, K, 4, device=device, dtype=dtype)
 
-        d_ij = pairwise_minkowski_distance_sq(ep)
-        d_ij.fill_diagonal_(float("inf"))
+    # ── 3. anchor (vectorized) ────────────────────────────
+    anchor = padded.clone()
 
-        k_use = min(K, n - 1)
-        _, nn_idx = d_ij.topk(k_use, dim=1, largest=False)
-        nn_momenta = ep[nn_idx]  # (n, k_use, 4)
+    spatial_norm = torch.sqrt(
+        (anchor[..., 1:] ** 2).sum(-1).clamp(min=eps)
+    ).unsqueeze(-1)
 
-        if k_use < K:
-            pad = ep.unsqueeze(1).expand(-1, K - k_use, -1)
-            nn_momenta = torch.cat([nn_momenta, pad], dim=1)
+    anchor[..., 1:] = anchor[..., 1:] / spatial_norm
+    anchor[..., 0] = 1.0
 
-        frames[s:e] = _gram_schmidt_minkowski(nn_momenta, eps)
+    frames[..., 0, :] = anchor
 
-    return frames  # (N, K, 4)
+    if K > 1:
+        # ── 4. pairwise spatial distances ─────────────────
+        diff = padded.unsqueeze(2) - padded.unsqueeze(1)  # (B, max_n, max_n, 4)
+        d_ij = (diff[..., 1:] ** 2).sum(-1)              # (B, max_n, max_n)
+
+        # mask invalid pairs
+        mask_ij = mask.unsqueeze(2) & mask.unsqueeze(1)
+        eye = torch.eye(max_n, device=device).bool().unsqueeze(0)
+
+        d_ij = torch.where(mask_ij & ~eye, d_ij, float("inf"))
+
+        # ── 5. nearest neighbours ─────────────────────────
+        k_use = min(K - 1, max_n - 1)
+        _, nn_idx = torch.topk(d_ij, k_use, dim=2, largest=False)
+
+        # ── 6. gather neighbours ──────────────────────────
+        nn_idx_exp = nn_idx.unsqueeze(-1).expand(-1, -1, -1, 4)
+        nn = torch.gather(
+            padded.unsqueeze(1).expand(-1, max_n, -1, -1),
+            dim=2,
+            index=nn_idx_exp,
+        )  # (B, max_n, k_use, 4)
+
+        center = padded.unsqueeze(2)
+        rel = nn - center
+
+        # ── 7. spatial directions only ────────────────────
+        rel[..., 0] = 0.0
+
+        norm = torch.sqrt(
+            (rel[..., 1:] ** 2).sum(-1).clamp(min=eps)
+        ).unsqueeze(-1)
+
+        rel = rel / norm
+
+        frames[..., 1:1 + k_use, :] = rel
+
+        if k_use < K - 1:
+            frames[..., 1 + k_use:, :] = rel[..., :1, :].expand(
+                -1, -1, K - 1 - k_use, -1
+            )
+
+    # ── 8. remove padding → back to (N, K, 4) ─────────────
+    out = torch.zeros(N, K, 4, device=device, dtype=dtype)
+
+    for b in range(B):
+        s, e = int(ptr[b]), int(ptr[b + 1])
+        out[s:e] = frames[b, :e - s]
+
+    return torch.nan_to_num(out)
 
 
 def lloca_dot_product_attention(
-    query: torch.Tensor,          # (H, N, d_head)
-    key: torch.Tensor,            # (H, N, d_head)
-    value: torch.Tensor,          # (H, N, d_head)
-    frames: torch.Tensor,         # (N, K, 4)
-    n_scalars: int,
-    n_vectors: int,
-    attn_mask: torch.Tensor | None = None,
-    dropout_p: float = 0.0,
-    training: bool = True,
-) -> torch.Tensor:
-    """
-    LLoCa attention with equivariant value aggregation.
-
-    Attention score (Lorentz invariant):
-        a_ij = (1/√d_s)  q_s_i · k_s_j
-             + (1/√(n_v·K))  Σ_{l,k}  (f_i^k · q_i^{v,l}) (f_i^k · k_j^{v,l})
-
-    Value aggregation (Lorentz equivariant):
-        Scalar channels : out_i = Σ_j w_ij v_j^s          (standard)
-        Vector channels : out_i = Σ_j w_ij (F_i g F_j^T) v_j^v
-                        = F_i [ Σ_j w_ij (F_j g v_j^v) ]  (factored form)
-
-    The factored form avoids materialising N×N×4×4 rotation matrices and
-    preserves d_head exactly.
-    """
+    query, key, value,
+    frames,
+    n_scalars,
+    n_vectors,
+    attn_mask=None
+):
     H, N, d_head = query.shape
     K = frames.shape[1]
     d_vec = n_vectors * 4
-    d_scalar_total = n_scalars + max(0, d_head - n_scalars - d_vec)
 
-    sign = _MINK_SIGN.to(device=query.device, dtype=query.dtype)
+    sign = _MINK_SIGN.to(query.device, query.dtype)
 
-    # ── Attention scores ─────────────────────────────────────────────────────
-
-    # Scalar channels (standard dot product, includes remainder)
+    # ── Scalars ─────────────────────────────
     q_s = torch.cat([query[..., :n_scalars], query[..., n_scalars + d_vec:]], dim=-1)
     k_s = torch.cat([key[..., :n_scalars], key[..., n_scalars + d_vec:]], dim=-1)
-    scale_s = d_scalar_total ** -0.5 if d_scalar_total > 0 else 1.0
-    attn = torch.bmm(q_s, k_s.transpose(-1, -2)) * scale_s  # (H, N, N)
 
-    # Vector channels (Lorentz-invariant frame projections)
-    if n_vectors > 0 and K > 0:
+    scale_s = max(q_s.shape[-1], 1) ** -0.5
+    attn = torch.bmm(q_s, k_s.transpose(-1, -2)) * scale_s
+
+    # ── Vector term ─────────────────────────
+    if n_vectors > 0:
         q_v = query[..., n_scalars:n_scalars + d_vec].reshape(H, N, n_vectors, 4)
         k_v = key[..., n_scalars:n_scalars + d_vec].reshape(H, N, n_vectors, 4)
 
-        frames_exp = frames.unsqueeze(0).unsqueeze(2)           # (1, N, 1, K, 4)
-        q_proj = (q_v.unsqueeze(-2) * frames_exp * sign).sum(-1)  # (H, N, n_v, K)
+        frames_exp = frames.unsqueeze(0).unsqueeze(2)
+
+        q_proj = (q_v.unsqueeze(-2) * frames_exp * sign).sum(-1)
         k_proj = (k_v.unsqueeze(-2) * frames_exp * sign).sum(-1)
 
-        scale_v = (n_vectors * K) ** -0.5
-        attn = attn + torch.bmm(
-            q_proj.reshape(H, N, n_vectors * K),
-            k_proj.reshape(H, N, n_vectors * K).transpose(-1, -2),
-        ) * scale_v
+        # VERY strong scaling
+        scale_v = 1.0 / max(n_vectors * K * 4, 1)
 
-    # ── Mask, softmax, dropout ───────────────────────────────────────────────
+        vec_term = torch.bmm(
+            q_proj.reshape(H, N, -1),
+            k_proj.reshape(H, N, -1).transpose(-1, -2),
+        )
+
+        attn = attn + vec_term * scale_v
+
+    # ── FULL SAFETY BLOCK ───────────────────
+
+    attn = torch.nan_to_num(attn, nan=0.0, posinf=50.0, neginf=-50.0)
+    attn = attn.clamp(-50, 50)
+
     if attn_mask is not None:
-        attn = attn.masked_fill(~attn_mask, float("-inf"))
+        attn = attn.masked_fill(~attn_mask, -1e9)
+
+    # prevent all -inf rows
+    row_max = attn.max(dim=-1, keepdim=True).values
+    attn = attn - row_max
 
     attn_weights = torch.softmax(attn, dim=-1)
-    if dropout_p > 0.0 and training:
-        attn_weights = F.dropout(attn_weights, p=dropout_p)
+    attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
 
-    # ── Equivariant value aggregation ────────────────────────────────────────
-
-    # Scalar / remainder channels: standard weighted sum
+    # ── Scalar output ───────────────────────
     v_s = torch.cat([value[..., :n_scalars], value[..., n_scalars + d_vec:]], dim=-1)
-    out_scalar = torch.bmm(attn_weights, v_s)  # (H, N, n_scalars + remainder)
+    out_scalar = torch.bmm(attn_weights, v_s)
 
     if n_vectors == 0:
-        return out_scalar  # d_head == n_scalars when n_vectors == 0
+        return out_scalar
 
-    # Vector channels: factored frame-to-frame rotation
-    #   F_i g F_j^T v_j  ==  F_i [ (F_j * sign) @ v_j ]
-    #                           ↑ un-project from j    ↑ re-project into i
+    # ── Vector output ───────────────────────
     v_v = value[..., n_scalars:n_scalars + d_vec].reshape(H, N, n_vectors, 4)
 
-    # Step 1 — project v_j onto its own frame (gives Lorentz-scalar local coords)
-    #   v_local[h, j, l, k] = Σ_μ  (frames[j,k,μ] * sign_μ) * v_v[h,j,l,μ]
-    Fi_g = frames * sign                              # (N, K, 4)
-    v_local = torch.einsum("jkm,hjlm->hjlk", Fi_g, v_v)  # (H, N, n_v, K)
+    Fi_g = frames * sign
+    v_local = torch.einsum("jkm,hjlm->hjlk", Fi_g, v_v)
+    v_local = torch.nan_to_num(v_local)
 
-    # Step 2 — weighted sum of local coords (scalars, so frame-independent)
     out_local = torch.bmm(
         attn_weights,
-        v_local.reshape(H, N, n_vectors * K),
-    ).reshape(H, N, n_vectors, K)                    # (H, N, n_v, K)
+        v_local.reshape(H, N, -1),
+    ).reshape(H, N, n_vectors, K)
 
-    # Step 3 — reconstruct in frame i (un-project into global representation)
-    #   out_v[h, i, l, μ] = Σ_k  out_local[h,i,l,k] * frames[i,k,μ]
-    out_v = torch.einsum("hilk,ikm->hilm", out_local, frames)  # (H, N, n_v, 4)
-    out_v = out_v.reshape(H, N, d_vec)               # (H, N, n_v * 4)
+    out_v = torch.einsum("hilk,ikm->hilm", out_local, frames)
+    out_v = torch.nan_to_num(out_v)
 
-    # ── Reconstruct in original channel order → (H, N, d_head) ──────────────
-    out_s1 = out_scalar[..., :n_scalars]
-    out_s2 = out_scalar[..., n_scalars:]
-    return torch.cat([out_s1, out_v, out_s2], dim=-1)
+    out_v = out_v.reshape(H, N, d_vec)
+
+    return torch.cat([out_scalar[..., :n_scalars], out_v, out_scalar[..., n_scalars:]], dim=-1)
