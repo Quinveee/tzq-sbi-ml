@@ -6,7 +6,7 @@ description:
   arguments: '$(tarball_name)'
   transfer_input_files: '$(tarball)'
   request_cpus: 4
-  request_memory: 16GB
+  request_memory: 24GB
   # This below will allow us to use the same Python interpreter we are using in the Acess Point in the
   # Working Node. Also, we modify the PYTHONPATH to make our files accesible from Python code from the 
   # Working Node. See `scripts/run.sh`
@@ -29,4 +29,4 @@ description:
 # long - 96 hours
 description_addition:
   +UseOS: '"el9"'
-  +JobCategory: '"long"'
+  +JobCategory: '"medium"'

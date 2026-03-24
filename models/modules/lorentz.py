@@ -42,7 +42,7 @@ def build_lloca_frames(particles, ptr, K, eps=1e-6):
     max_n = int(lengths.max().item())
     N = particles.shape[0]
 
-    # ── 1. pack into padded tensor ────────────────────────
+    # Pad tensors to (B, max_n, 4) and (B, max_n) for batch processing
     padded = torch.zeros(B, max_n, 4, device=device, dtype=dtype)
     mask = torch.zeros(B, max_n, dtype=torch.bool, device=device)
 
@@ -51,10 +51,10 @@ def build_lloca_frames(particles, ptr, K, eps=1e-6):
         padded[b, :e - s] = particles[s:e]
         mask[b, :e - s] = True
 
-    # ── 2. build frames tensor ────────────────────────────
+    # Initialize frames tensor
     frames = torch.zeros(B, max_n, K, 4, device=device, dtype=dtype)
 
-    # ── 3. anchor (vectorized) ────────────────────────────
+    # Normalize time component to 1 and spatial components to unit vectors 
     anchor = padded.clone()
 
     spatial_norm = torch.sqrt(
@@ -67,21 +67,21 @@ def build_lloca_frames(particles, ptr, K, eps=1e-6):
     frames[..., 0, :] = anchor
 
     if K > 1:
-        # ── 4. pairwise spatial distances ─────────────────
+        # Calculate pairwise Minkowski distances
         diff = padded.unsqueeze(2) - padded.unsqueeze(1)  # (B, max_n, max_n, 4)
         d_ij = (diff[..., 1:] ** 2).sum(-1)              # (B, max_n, max_n)
 
-        # mask invalid pairs
+        # Mask out invalid pairs and self-pairs
         mask_ij = mask.unsqueeze(2) & mask.unsqueeze(1)
         eye = torch.eye(max_n, device=device).bool().unsqueeze(0)
 
         d_ij = torch.where(mask_ij & ~eye, d_ij, float("inf"))
 
-        # ── 5. nearest neighbours ─────────────────────────
+        # Select K-1 nearest neighbors based on spatial distance
         k_use = min(K - 1, max_n - 1)
         _, nn_idx = torch.topk(d_ij, k_use, dim=2, largest=False)
 
-        # ── 6. gather neighbours ──────────────────────────
+        # Gather nearest neighbor coordinates
         nn_idx_exp = nn_idx.unsqueeze(-1).expand(-1, -1, -1, 4)
         nn = torch.gather(
             padded.unsqueeze(1).expand(-1, max_n, -1, -1),
@@ -92,7 +92,7 @@ def build_lloca_frames(particles, ptr, K, eps=1e-6):
         center = padded.unsqueeze(2)
         rel = nn - center
 
-        # ── 7. spatial directions only ────────────────────
+        # Normalize relative vectors to unit spatial length and set time component to 0
         rel[..., 0] = 0.0
 
         norm = torch.sqrt(
@@ -108,7 +108,7 @@ def build_lloca_frames(particles, ptr, K, eps=1e-6):
                 -1, -1, K - 1 - k_use, -1
             )
 
-    # ── 8. remove padding → back to (N, K, 4) ─────────────
+    # Remove padding and reshape back to (N, K, 4)
     out = torch.zeros(N, K, 4, device=device, dtype=dtype)
 
     for b in range(B):
