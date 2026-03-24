@@ -89,9 +89,13 @@ def derive_config(cfg: DictConfig) -> DictConfig:
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and
     # Transformer use particles by default.
-    dataset_key = model_key
-    if model_key == "transformer" and transformer_input == "features":
-        dataset_key = "transformer_features"
+    # For preprocessing, use the dataset key directly (e.g., 1d, 3d)
+    if cfg.exp.key == "preprocessing":
+        dataset_key = cfg.dataset.key
+    else:
+        dataset_key = model_key
+        if model_key == "transformer" and transformer_input == "features":
+            dataset_key = "transformer_features"
     cfg.merge_with(load_conf_from(auto_dir / "dataset" / dataset_key, merge_on="dataset"))
 
     # We use fixed loss functions for either LLR regression or Score regression

@@ -1,0 +1,8 @@
+# Preprocessing configuration
+preprocessing:
+  batch_size: 512
+  models:
+    MIParT:
+      checkpoint_path: /project/atlas/users/qvanenge/code/tzq-sbi-ml/models/MIParT/MIParT_kin.pt
+    ParT:
+      checkpoint_path: /project/atlas/users/qvanenge/code/tzq-sbi-ml/models/ParT/ParT_kin.pt

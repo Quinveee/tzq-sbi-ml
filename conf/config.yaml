@@ -3,6 +3,7 @@ defaults:
   - dataset: ???
   - model: noop # Not necessarily needed if exp=histos
   - launcher: local
+  - preprocessing: _base
   - _self_
 
 # Default parameters, are overridden by model specific parameters
@@ -35,3 +36,4 @@ data:
   ckpts: checkpoints.pt
   run_dir_base: run_dirs
   run_dir: ${.run_dir_base}/${dataset.key}/${exp.key}/${model.key}/${.run}
+  model: null  # For preprocessing: which model to use (MIParT or ParT)

@@ -1,0 +1,6 @@
+exp:
+  _target_: experiments.particles.preprocessing.PreprocessingParticles
+model: {}
+data:
+  model: MIParT
+  source: ${dataset.path}

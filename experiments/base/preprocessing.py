@@ -6,10 +6,19 @@ import torch
 import tqdm as tqdm
 
 from models.ParT.ParticleTransformer import ParticleTransformer
-from models.MIParT.MIParticleTransformerWrapper import MIParticleTransformerWrapper
+from models.MIParT.MIParticleTransformer import MIParticleTransformerWrapper
+
+# Simple wrapper for ParT to match checkpoint structure
+class ParTWrapper(torch.nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.mod = ParticleTransformer(**kwargs)
+    
+    def forward(self, x, v=None, mask=None):
+        return self.mod(x, v=v, mask=mask)
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 class BasePreprocessing:
     """
@@ -146,7 +155,11 @@ class BasePreprocessing:
         :param model: the model to use for inference
         :param data: the data to pass through the model, shape (nsamples, max_particles, n_features)
         """
-        batch_size = self.cfg.data.batch_size
+        batch_size = (
+            OmegaConf.select(self.cfg, "preprocessing.batch_size")
+            or OmegaConf.select(self.cfg, "preprocessing.preprocessing.batch_size")
+            or 32
+        )
         jet_scores = []
 
         for batch in tqdm.tqdm(self._load_batch(data, batch_size), total=(data.shape[0] // batch_size) + 1, desc="Inferring jet scores"):
@@ -166,22 +179,39 @@ class BasePreprocessing:
         :param model_name: Name of the model to initialize (e.g., "MIParT", "ParT")
         :return: Initialized model
         """
-        if model_name == "MIParT":
-            # Initialize MIParT model
-            checkpoint_path = Path("/project/atlas/users/qvanenge/code/tzq-sbi-ml/models/MIParT/MIParT_kin.pt")
-            if not checkpoint_path.exists():
-                print(f"ERROR: Checkpoint not found at {checkpoint_path}")
-                return
-            
-            state_dict = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint_keys = [
+            f"preprocessing.models.{model_name}.checkpoint_path",
+            f"preprocessing.preprocessing.models.{model_name}.checkpoint_path",
+        ]
+        checkpoint_value = None
+        for checkpoint_key in checkpoint_keys:
+            checkpoint_value = OmegaConf.select(self.cfg, checkpoint_key)
+            if checkpoint_value is not None:
+                break
 
-            # Infer the key architectural dimensions from the checkpoint
-            input_dim = state_dict["mod.embed.input_bn.weight"].numel()
-            num_classes = state_dict["mod.fc.0.weight"].shape[0]
+        if checkpoint_value is None:
+            print(
+                f"ERROR: Missing config value for checkpoint path. Tried: {checkpoint_keys}"
+            )
+            return
+
+        checkpoint_path = Path(checkpoint_value)
+
+        if not checkpoint_path.exists():
+            print(f"ERROR: Checkpoint not found at {checkpoint_path}")
+            return
+        
+        state_dict = torch.load(checkpoint_path, map_location="cpu")
+
+        # Infer model architecture from state dict keys
+        input_dim = state_dict["mod.embed.input_bn.weight"].numel()
+        num_classes = state_dict["mod.fc.0.weight"].shape[0]
+        
+        if model_name == "MIParT":
             num_mi_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.blocks.")})
             num_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.blocks2.")})
             num_cls_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.cls_blocks.")})
-
+            
             model = MIParticleTransformerWrapper(
                 input_dim=input_dim,
                 num_classes=num_classes,
@@ -201,22 +231,10 @@ class BasePreprocessing:
                 groups=1,
             )
         elif model_name == "ParT":
-            # Initialize ParT model
-            checkpoint_path = Path("/project/atlas/users/qvanenge/code/tzq-sbi-ml/models/ParT/ParT_kin.pt")
-            if not checkpoint_path.exists():
-                print(f"ERROR: Checkpoint not found at {checkpoint_path}")
-                return
-            
-            state_dict = torch.load(checkpoint_path, map_location="cpu")
-
-            # Infer the key architectural dimensions from the checkpoint
-            input_dim = state_dict["mod.embed.input_bn.weight"].numel()
-            num_classes = state_dict["mod.fc.0.weight"].shape[0]
-            num_mi_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.blocks.")})
-            num_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.blocks2.")})
+            num_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.blocks.") and ".blocks." in k})
             num_cls_layers = len({int(k.split(".")[2]) for k in state_dict if k.startswith("mod.cls_blocks.")})
-
-            model = ParticleTransformer(
+            
+            model = ParTWrapper(
                 input_dim=input_dim,
                 num_classes=num_classes,
                 pair_input_dim=4,
@@ -235,6 +253,7 @@ class BasePreprocessing:
         else:
             raise ValueError(f"Unknown model name: {model_name}")
 
+        # Load state dict and set model to eval mode
         model.load_state_dict(state_dict)
         model.eval()
         return model
@@ -254,32 +273,52 @@ class BasePreprocessing:
 
     def _convert_data(self, source: str, model: str = "ParT") -> None:
         """
-        Convert data containg 4 kinematics to data with 
-        4 kinematics + pt eta phi + engineerd features (ML based and 'normal')
+        Convert data containing 4 kinematics to data with 
+        4 kinematics + pt eta phi + engineered features (ML based and 'normal')
 
-        :param source: location of data folder
+        :param source: location of data folder (same as particle experiments)
         :param model: which model to use for ml features, either "MIParT" or "ParT"
         """
-
-        # load data
         source = Path(source)
-        data = np.load(source)
+        
+        # Load train and test data
+        print(f"Loading data from {source}")
+        x_train = np.load(source / "x_train_ratio.npy")
+        x_test = np.load(source / "x_test.npy")
+        print(f"Train data shape: {x_train.shape}, Test data shape: {x_test.shape}")
 
-        # transform data
-        inference_data, features = self._transform(data) # inference_data shape: (nsamples, max_particles, n_features) feature shape: (nsamples, n_engineered_features)
-        inference_data = inference_data.swapaxes(1, 2) # swap to (nsamples, n_features, max_particles) for model input
+        # Transform both train and test data
+        print(f"Transforming data...")
+        train_inference_data, train_features = self._transform(x_train)
+        test_inference_data, test_features = self._transform(x_test)
+        
+        # Swap axes for model input (nsamples, n_features, max_particles)
+        train_inference_data = train_inference_data.swapaxes(1, 2)
+        test_inference_data = test_inference_data.swapaxes(1, 2)
 
-        # TODO: make model paths configurable in the config file
-        # TODO: use initialize_model to load the model instead of hardcoding the paths and model initialization here
-        model = self._initialize_model(model)
+        # Initialize model
+        print(f"Initializing {model} model...")
+        model_instance = self._initialize_model(model)
+        if model_instance is None:
+            return
 
-        # inference jet scores and add to features
-        jet_scores = self._inference_jet_scores(model, inference_data) # shape (nsamples, num_classes)
+        # Inference jet scores for both
+        print(f"Running inference on train data...")
+        train_jet_scores = self._inference_jet_scores(model_instance, train_inference_data)
+        
+        print(f"Running inference on test data...")
+        test_jet_scores = self._inference_jet_scores(model_instance, test_inference_data)
 
-        # concatenate jet scores to features
-        tf_data = np.concatenate([features, jet_scores[:, :4]], axis=-1) # shape (nsamples, n_engineered_features + num_classes) where num_classes is typically 4 for q/g, W->qq, Z->qq, top
+        # Concatenate jet scores to features
+        train_tf_data = np.concatenate([train_features, train_jet_scores[:, :4]], axis=-1)
+        test_tf_data = np.concatenate([test_features, test_jet_scores[:, :4]], axis=-1)
 
-        # Save transformed data to same location with modified name
-        target = source.with_name(source.stem + "_processed" + source.suffix)
-        np.savez(target, data=tf_data)
-        print(f"Transformed data saved to {target}")
+        # Save transformed data
+        train_target = source / "x_train_ratio_processed.npy"
+        test_target = source / "x_test_processed.npy"
+        
+        np.save(train_target, train_tf_data)
+        np.save(test_target, test_tf_data)
+        
+        print(f"Transformed train data saved to {train_target}")
+        print(f"Transformed test data saved to {test_target}")
