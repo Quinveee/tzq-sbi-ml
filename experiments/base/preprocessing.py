@@ -69,13 +69,24 @@ class BasePreprocessing:
         return x.reshape(n_samples, particles, 4)
 
 
-    def _transform(self, data: np.ndarray):
+    def _transform(self, data: np.ndarray, met: bool = False) -> np.ndarray:
         """
         Transforms the data to pt eta phi using the vector library
         assumes the data is structured according to: E px py pz
         """
+        
+        # Handle optional MET features
+        if met:
+            met = data[:, -2:]  # Assuming MET features are the last 2 features
+            data = data[:, :-2]  # Remove MET features from particle data
+            met_pt = met[:, 0:1]
+            met_phi = met[:, 1:2]
 
-        # reshape data to (nsamples, max_particles, 4)
+            met_px = met_pt * np.cos(met_phi)
+            met_py = met_pt * np.sin(met_phi)
+
+
+        # Reshape data to (nsamples, max_particles, 4)
         particles = self._reshape_particles(data)
 
         E  = np.nan_to_num(particles[:, :, 0],  nan=0.0)
@@ -83,11 +94,12 @@ class BasePreprocessing:
         py = np.nan_to_num(particles[:, :, 2],  nan=0.0)
         pz = np.nan_to_num(particles[:, :, 3],  nan=0.0)
 
-        # create mask to handle nan values
+        # Create mask to handle nan values
         mask = ~np.isnan(E)
         def apply_mask(x):
             return np.where(mask, x, np.nan)
 
+        # Build vector array and calculate jet 4-momentum by summing over particles
         p4 = self._convert_vector(E, px, py, pz)
         jet = p4.sum(axis=1)
 
@@ -101,6 +113,7 @@ class BasePreprocessing:
         part_phi = p4.phi
         part_E   = p4.energy
 
+        # Calculate relative features
         d_eta = part_eta - jet_eta
         d_phi = part_phi - jet_phi
         d_phi = (d_phi + np.pi) % (2 * np.pi) - np.pi
@@ -114,6 +127,88 @@ class BasePreprocessing:
 
         log_pt_rel = np.log((part_pt / (jet_pt + eps)) + eps)
         log_E_rel  = np.log((part_E  / (jet_E  + eps)) + eps)
+
+
+        # # Nessacery for high level features
+        # bjet = ...          # jet with highest b-tag
+        # forward_jet = ...   # highest |eta|
+        # radiation_jet = ... # non-b jet, not forward
+
+        # l1, l2 = leptons[0], leptons[1]
+        # p_Z = fourvec(l1) + fourvec(l2)
+
+        # # High level features:
+        # m_bjf = invariant_mass(fourvec(bjet) + fourvec(forward_jet)) # Invariant mass of the b-jet and the forward jet
+        # m_top = invariant_mass(p_top) # Reconstructed top-quark mass
+        # m_ll = invariant_mass(p_Z) # Reconstructed Z boson mass
+        # m_jj = invariant_mass(fourvec(jets[0]) + fourvec(jets[1])) # Invariant mass of the two leading jets
+        # m_bj = invariant_mass(fourvec(bjet) + fourvec(jets[0])) # Invariant mass of the b-jet and the leading jet
+        # # Invariant mass of all selected particles in the event
+        # # all visible objects
+        # p_all = np.zeros(4)
+        # for obj in leptons + jets:
+        #     p_all += fourvec(obj)
+
+        # m_all = invariant_mass(p_all)
+
+        # eta_fj = abs(eta(forward_jet.px, forward_jet.py, forward_jet.pz)) # Absolute value of the forward jet η
+        # eta_j_rad = abs(eta(radiation_jet.px, radiation_jet.py, radiation_jet.pz)) # Absolute value of the radiation jet η
+        # btag_score = bjet.btag # b-tagging score of the b-jet
+        # deltaR_fjZ = ... # ΔR between the forward jet and the reconstructed Z boson
+
+        # pt_Z = pt(p_Z[1], p_Z[2]) # Transverse momentum of the reconstructed Z boson
+        # pt_W = pt(p_W[1], p_W[2]) # Transverse momentum of the reconstructed W boson
+        # pt_top = pt(p_top[1], p_top[2]) # Transverse momentum of the reconstructed top quark
+        # h_t = part_pt.sum(axis=1, keepdims=True) # Scalar sum of the pT of the selected particles in the event
+
+        # if met:
+        #     # Calculate transverse mass of the W boson using jet and MET information
+        #     met_mW = np.sqrt(2 * jet_pt * met_pt * (1 - np.cos(jet_phi - met_phi)))
+
+        # Invariant mass of all particles in the event, calculated from the sum of their 4-momenta
+        p_all_E  = np.sum(E, axis=1)
+        p_all_px = np.sum(px, axis=1)
+        p_all_py = np.sum(py, axis=1)
+        p_all_pz = np.sum(pz, axis=1)
+
+        m_all = np.sqrt(np.maximum(
+            p_all_E**2 - (p_all_px**2 + p_all_py**2 + p_all_pz**2),
+            0.0
+        ))[:, None]
+
+        # Scalar sum of the pT of the selected particles in the event
+        h_t = np.sum(part_pt, axis=1, keepdims=True)
+
+        # Features of leading jet
+        lead_pt = part_pt[:, 0:1]
+        lead_eta = part_eta[:, 0:1]
+
+        # Pairwise invariant mass for the two leading particles in the jet
+        p12_E  = E[:, 0] + E[:, 1]
+        p12_px = px[:, 0] + px[:, 1]
+        p12_py = py[:, 0] + py[:, 1]
+        p12_pz = pz[:, 0] + pz[:, 1]
+
+        m_12 = np.sqrt(np.maximum(
+            p12_E**2 - (p12_px**2 + p12_py**2 + p12_pz**2),
+            0.0
+        ))[:, None]
+
+        # Calculate standard deviation of eta and phi of the particles in the jet
+        eta_std = np.std(part_eta, axis=1, keepdims=True)
+        phi_std = np.std(part_phi, axis=1, keepdims=True)
+
+        if met:
+            met_pt_feat = met_pt
+            met_phi_feat = met_phi
+
+            met_mT = np.sqrt(
+                2 * jet_pt * met_pt * (1 - np.cos(jet_phi - met_phi))
+            )
+        else:
+            met_pt_feat = np.zeros_like(h_t)
+            met_phi_feat = np.zeros_like(h_t)
+            met_mT = np.zeros_like(h_t)
 
         # apply mask
         part_pt  = apply_mask(part_pt)
@@ -130,6 +225,7 @@ class BasePreprocessing:
         log_pt_rel = apply_mask(log_pt_rel)
         log_E_rel  = apply_mask(log_E_rel)
 
+        # Necessary for ml features
         X = np.stack([
             d_eta,
             d_phi,
@@ -140,10 +236,41 @@ class BasePreprocessing:
             dR,
         ], axis=-1)
 
-        # TODO: add more features, e.g. jet mass, missing energy, etc.
-        features = np.concatenate([jet_pt, jet_eta, jet_phi, jet_E], axis=-1) # shape (nsamples, 4)
+        # # Optional additional features to add to the data
+        # high_level_features = np.concatenate([
+        #     m_bjf,
+        #     m_top,
+        #     m_ll,
+        #     m_jj,
+        #     m_bj,
+        #     m_all,
+        #     eta_fj,
+        #     eta_j_rad,
+        #     btag_score,
+        #     deltaR_fjZ,
+        #     pt_Z,
+        #     pt_W,
+        #     pt_top,
+        #     h_t
+        # ], axis=-1)
 
-        return X, features
+        high_level_features = np.concatenate([
+            m_all,
+            h_t,
+            lead_pt,
+            lead_eta,
+            m_12,
+            eta_std,
+            phi_std,
+            met_pt_feat,
+            met_phi_feat,
+            met_mT
+        ], axis=-1)
+
+        if met:
+            high_level_features = np.concatenate([high_level_features, met_mW], axis=-1)
+
+        return X, high_level_features
 
 
     def _inference_jet_scores(self, model, data: np.ndarray) -> np.ndarray:
@@ -271,29 +398,33 @@ class BasePreprocessing:
             yield data[i:i + batch_size]
 
 
-    def _convert_data(self, source: str, model: str = "ParT") -> None:
+    def _convert_data(self, source: str, model: str = "ParT", met: bool=False) -> None:
         """
         Convert data containing 4 kinematics to data with 
         4 kinematics + pt eta phi + engineered features (ML based and 'normal')
 
         :param source: location of data folder (same as particle experiments)
         :param model: which model to use for ml features, either "MIParT" or "ParT"
+        :param met: whether source data contains missing energy (if True, will add MET features to the data and pass through the model)
         """
         source = Path(source)
         
         # Load train and test data
         print(f"Loading data from {source}")
-        x_train = np.load(source / "x_train_ratio.npy")
+        x_train_ratio = np.load(source / "x_train_ratio.npy")
+        x_train_score = np.load(source / "x_train_score.npy")
         x_test = np.load(source / "x_test.npy")
-        print(f"Train data shape: {x_train.shape}, Test data shape: {x_test.shape}")
+        print(f"Train data shape: {x_train_ratio.shape}, Test data shape: {x_test.shape}")
 
         # Transform both train and test data
         print(f"Transforming data...")
-        train_inference_data, train_features = self._transform(x_train)
-        test_inference_data, test_features = self._transform(x_test)
+        train_ratio_inference_data, train_ratio_features = self._transform(x_train_ratio, met=met)
+        train_score_inference_data, train_score_features = self._transform(x_train_score, met=met)
+        test_inference_data, test_features = self._transform(x_test, met=met)
         
         # Swap axes for model input (nsamples, n_features, max_particles)
-        train_inference_data = train_inference_data.swapaxes(1, 2)
+        train_ratio_inference_data = train_ratio_inference_data.swapaxes(1, 2)
+        train_score_inference_data = train_score_inference_data.swapaxes(1, 2)
         test_inference_data = test_inference_data.swapaxes(1, 2)
 
         # Initialize model
@@ -303,22 +434,35 @@ class BasePreprocessing:
             return
 
         # Inference jet scores for both
-        print(f"Running inference on train data...")
-        train_jet_scores = self._inference_jet_scores(model_instance, train_inference_data)
+        print(f"Running inference on ratio train data...")
+        train_jet_scores = self._inference_jet_scores(model_instance, train_ratio_inference_data)
         
+        print(f"Running inference on score train data...")
+        train_score_jet_scores = self._inference_jet_scores(model_instance, train_score_inference_data)
+
         print(f"Running inference on test data...")
         test_jet_scores = self._inference_jet_scores(model_instance, test_inference_data)
 
+        # TODO: Decide how to save and how to use in the models
         # Concatenate jet scores to features
-        train_tf_data = np.concatenate([train_features, train_jet_scores[:, :4]], axis=-1)
+        train_ratio_tf_data = np.concatenate([train_ratio_features, train_jet_scores[:, :4]], axis=-1)
+        train_score_tf_data = np.concatenate([train_score_features, train_score_jet_scores[:, :4]], axis=-1)
         test_tf_data = np.concatenate([test_features, test_jet_scores[:, :4]], axis=-1)
 
         # Save transformed data
-        train_target = source / "x_train_ratio_processed.npy"
-        test_target = source / "x_test_processed.npy"
-        
-        np.save(train_target, train_tf_data)
-        np.save(test_target, test_tf_data)
-        
-        print(f"Transformed train data saved to {train_target}")
-        print(f"Transformed test data saved to {test_target}")
+        train_r_high_lvl = source / "x_train_ratio_hlvl.npy"
+        train_s_high_lvl = source / "x_train_score_hlvl.npy"
+
+        train_r_jet_lvl = source / "x_train_ratio_llvl.npy"
+        train_s_jet_lvl = source / "x_train_score_llvl.npy"
+
+        test_jet_lvl = source / "x_test_llvl.npy"
+        test_high_lvl = source / "x_test_hlvl.npy"
+
+        print(f"Saving transformed data to {source}")
+        np.save(train_r_high_lvl, train_ratio_tf_data)
+        np.save(train_s_high_lvl, train_score_tf_data)
+        np.save(train_r_jet_lvl, train_jet_scores)
+        np.save(train_s_jet_lvl, train_score_jet_scores)
+        np.save(test_jet_lvl, test_jet_scores)
+        np.save(test_high_lvl, test_tf_data)
