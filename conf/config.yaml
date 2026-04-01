@@ -37,3 +37,4 @@ data:
   run_dir_base: run_dirs
   run_dir: ${.run_dir_base}/${dataset.key}/${exp.key}/${model.key}/${.run}
   model: null  # For preprocessing: which model to use (MIParT or ParT)
+  met: false  # Whether source data contains MET features

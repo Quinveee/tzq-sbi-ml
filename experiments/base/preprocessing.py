@@ -45,8 +45,9 @@ class BasePreprocessing:
         """
         source = self.cfg.data.source
         model = self.cfg.data.model
+        met = self.cfg.data.met
 
-        self._convert_data(source, model)
+        self._convert_data(source, model, met=met)
 
 
     def _convert_vector(self, E: np.ndarray, px: np.ndarray, py: np.ndarray, pz: np.ndarray):
@@ -77,10 +78,10 @@ class BasePreprocessing:
         
         # Handle optional MET features
         if met:
-            met = data[:, -2:]  # Assuming MET features are the last 2 features
+            met_features = data[:, -2:]  # Assuming MET features are the last 2 features
             data = data[:, :-2]  # Remove MET features from particle data
-            met_pt = met[:, 0:1]
-            met_phi = met[:, 1:2]
+            met_pt = met_features[:, 0:1]
+            met_phi = met_features[:, 1:2]
 
             met_px = met_pt * np.cos(met_phi)
             met_py = met_pt * np.sin(met_phi)
@@ -198,7 +199,7 @@ class BasePreprocessing:
         eta_std = np.std(part_eta, axis=1, keepdims=True)
         phi_std = np.std(part_phi, axis=1, keepdims=True)
 
-        if met:
+        if use_met:
             met_pt_feat = met_pt
             met_phi_feat = met_phi
 
@@ -266,9 +267,6 @@ class BasePreprocessing:
             met_phi_feat,
             met_mT
         ], axis=-1)
-
-        if met:
-            high_level_features = np.concatenate([high_level_features, met_mW], axis=-1)
 
         return X, high_level_features
 
@@ -415,6 +413,12 @@ class BasePreprocessing:
         x_train_score = np.load(source / "x_train_score.npy")
         x_test = np.load(source / "x_test.npy")
         print(f"Train data shape: {x_train_ratio.shape}, Test data shape: {x_test.shape}")
+
+        if not met and (x_train_ratio.shape[1] % 4 != 0 or x_test.shape[1] % 4 != 0):
+            print("Possible MET features found in data but 'met' flag is not set. Please set 'met=True' to handle MET features.")
+            x_train_ratio = x_train_ratio[:, :-2]
+            x_train_score = x_train_score[:, :-2]
+            x_test = x_test[:, :-2]
 
         # Transform both train and test data
         print(f"Transforming data...")
