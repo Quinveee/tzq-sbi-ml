@@ -25,6 +25,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         super().__init__(*args, **kwds)
         lloca_cfg = self.cfg.model.get("LLoCa", {})
         self._use_preprocessed = bool(self.cfg.data.get("preprocessed", False))
+        self._use_met = bool(self.cfg.data.get("met", False)) and not self._use_preprocessed
         self._preprocessed_dim = (
             int(self.cfg.data.get("n_preprocessed_features", 0))
             if self._use_preprocessed
@@ -98,6 +99,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
                 labels=raw.labels_train,
                 preprocessed=raw.preprocessed_train,
                 preprocessed_dim=self._preprocessed_dim,
+                met=self._use_met,
             )
         if mode == "test":
             return self.dataset_cls(
@@ -108,6 +110,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
                 labels=raw.labels_test,
                 preprocessed=raw.preprocessed_test,
                 preprocessed_dim=self._preprocessed_dim,
+                met=self._use_met,
             )
         raise ValueError(f"Invalid mode {mode}")
 
@@ -129,6 +132,8 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         }
         if self._use_preprocessed:
             embedding_kwargs["preprocessed"] = batch.preprocessed
+        if self._use_met:
+            embedding_kwargs["met"] = batch.met
 
         # Regress log-likelihood ratio
         model_kwds = {
@@ -141,6 +146,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
             model_kwds["scalars"] = (
                 batch.preprocessed if self._use_preprocessed else None
             )
+            model_kwds["met"] = batch.met if self._use_met else None
 
         log_ratio_pred = self.model(**model_kwds)
         return self.pack_output(

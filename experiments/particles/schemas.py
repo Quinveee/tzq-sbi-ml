@@ -16,6 +16,7 @@ class ParticlesEvent:
     length: int
     score: np.ndarray
     preprocessed: np.ndarray
+    met: np.ndarray
 
 
 @dataclass(slots=True)
@@ -31,6 +32,7 @@ class ParticleBatch:
     ptr: torch.Tensor
     score: torch.Tensor
     preprocessed: torch.Tensor
+    met: torch.Tensor
 
     def to_(self, **kwargs):
         to_fields(self, **kwargs)

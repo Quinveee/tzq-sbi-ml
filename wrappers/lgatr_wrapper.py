@@ -7,6 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Dict, Literal, Optional
 
+import torch
 from hydra.utils import instantiate
 from lgatr import extract_scalar
 from torch.nn.attention import sdpa_kernel
@@ -91,6 +92,7 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
         particles: Tensor,
         ptr: Tensor,
         scalars: Optional[Tensor] = None,
+        met: Optional[Tensor] = None,
         force_math: bool = False,
         embedding_kwargs: Optional[Dict] = None,
     ) -> Tensor:
@@ -106,6 +108,8 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
         :type ptr: Tensor
         :param scalars: Description
         :type scalars: Optional[Tensor]
+        :param met: Event-level MET features (pt, phi) to add as scalar channels
+        :type met: Optional[Tensor]
         :param force_math: Description
         :type force_math: bool
         :param embedding_kwargs: Description
@@ -133,6 +137,19 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
         )
         if scalars is not None and scalars.shape[-1] == 0:
             scalars = None
+
+        # Expand event-level MET and concatenate with existing scalar channels
+        if met is not None and met.shape[-1] > 0:
+            met_expanded = self._expand_event_scalars(
+                met,
+                ptr,
+                mode=mode,
+                theta_dim=theta_dim,
+            )
+            if scalars is None:
+                scalars = met_expanded
+            else:
+                scalars = torch.cat((scalars, met_expanded), dim=-1)
 
         # Create masking matrix for self-attention
         index = ptr2index(ptr, mode=mode, theta_dim=theta_dim)

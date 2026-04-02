@@ -2,6 +2,8 @@
 Datasets for the 'particles' approach
 """
 
+from __future__ import annotations
+
 from typing import Optional
 
 import numpy as np
@@ -10,22 +12,30 @@ from torch.utils.data import Dataset
 from .schemas import ParametrizedParticlesEvent, ParticlesEvent
 
 
-def _reshape_particles(x: np.ndarray) -> np.ndarray:
+def _reshape_particles(
+    x: np.ndarray, met: bool = False
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Reshape numpy array in which each event contains
-    (max_num_particles * 4) features.
+    (max_num_particles * 4) features, optionally extracting trailing
+    MET features (pt, phi).
 
-    :param x: Description
+    :param x: Flat array of shape (samples, n_particles*4 [+ 2])
     :type x: np.ndarray
-    :return: Description
-    :rtype: ndarray[_AnyShape, dtype[Any]]
+    :param met: Whether the data contains trailing MET features
+    :type met: bool
+    :return: Tuple of (particles, met_features) where met_features is
+        None when met=False or shape (samples, 2) when met=True
+    :rtype: tuple[np.ndarray, Optional[np.ndarray]]
     """
     samples, features = x.shape
 
     # Some datasets may include trailing MET features (pt, phi).
     # These should not be interpreted as particle four-momenta.
-    # TODO: maybe add a flag to enable/disable this behavior if needed for some specific dataset.
+    met_features = None
     if features % 4 == 2:
+        if met:
+            met_features = x[:, -2:].astype(np.float32)
         x = x[:, :-2]
         features -= 2
 
@@ -35,7 +45,7 @@ def _reshape_particles(x: np.ndarray) -> np.ndarray:
     assert not features % 4, "invalid number of features"
 
     # (samples, max_particles, 4)
-    return x.reshape(samples, max_particles, 4).astype(np.float32)
+    return x.reshape(samples, max_particles, 4).astype(np.float32), met_features
 
 
 def _sample_lengths(x: np.ndarray):
@@ -66,6 +76,7 @@ class ParticlesDataset(Dataset):
         score: Optional[np.ndarray] = None,
         preprocessed: Optional[np.ndarray] = None,
         preprocessed_dim: Optional[int] = None,
+        met: bool = False,
         **kwds,
     ) -> None:
         # allow for unlabelled data
@@ -84,10 +95,15 @@ class ParticlesDataset(Dataset):
 
         assert len(x) == len(preprocessed), "x and preprocessed differ in length"
 
-        self._x = _reshape_particles(x)
+        self._x, met_features = _reshape_particles(x, met=met)
         self._lengths = _sample_lengths(self._x)
         self._score = score  # (nsamples, ??) depends on dim(theta)
         self._preprocessed = preprocessed.astype(np.float32)
+        self._met = (
+            met_features
+            if met_features is not None
+            else np.zeros((len(x), 0), dtype=np.float32)
+        )
 
     def __len__(self) -> int:
         return len(self._x)
@@ -111,6 +127,7 @@ class ParticlesDataset(Dataset):
             length=int(self._lengths[index]),
             score=self._score[index],
             preprocessed=self._preprocessed[index],
+            met=self._met[index],
         )
 
 
@@ -129,6 +146,7 @@ class ParametrizedParticleDataset(ParticlesDataset):
         labels: Optional[np.ndarray] = None,
         preprocessed: Optional[np.ndarray] = None,
         preprocessed_dim: Optional[int] = None,
+        met: bool = False,
         **kwds,
     ):
         super().__init__(
@@ -136,6 +154,7 @@ class ParametrizedParticleDataset(ParticlesDataset):
             score=score,
             preprocessed=preprocessed,
             preprocessed_dim=preprocessed_dim,
+            met=met,
         )
         # allow for unllabeled data
         ratio = ratio if ratio is not None else np.zeros((len(x), 1))
@@ -167,6 +186,7 @@ class ParametrizedParticleDataset(ParticlesDataset):
             length=int(self._lengths[index]),
             score=self._score[index],
             preprocessed=self._preprocessed[index],
+            met=self._met[index],
             ratio=self._ratios[index],
             label=self._labels[index],
         )

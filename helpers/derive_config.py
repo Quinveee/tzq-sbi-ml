@@ -117,6 +117,28 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         cfg.model.net.in_s_channels = n_preprocessed_features
         cfg.model.net.out_s_channels = n_preprocessed_features
 
+    # When MET features are present and preprocessed features are NOT used,
+    # the raw MET (pt, phi) is fed directly to the model as 2 extra scalars.
+    # (When preprocessed=true, MET-derived quantities are already part of the
+    # high-level feature vector, so no extra adjustment is needed.)
+    use_met = bool(cfg.data.get("met", False))
+    n_met_features = 2  # MET pt and phi
+
+    if use_met and not use_preprocessed and model_key == "transformer":
+        if transformer_input != "particles":
+            raise ValueError(
+                "data.met=true is only supported with model.input_level=particles"
+            )
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        dim_in = int(resolved_net["dim_in"])
+        cfg.model.net.dim_in = dim_in + n_met_features
+
+    if use_met and not use_preprocessed and model_key == "lgatr":
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        in_s = int(resolved_net.get("in_s_channels", 0))
+        cfg.model.net.in_s_channels = in_s + n_met_features
+        cfg.model.net.out_s_channels = in_s + n_met_features
+
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and
     # Transformer use particles by default.

@@ -101,3 +101,12 @@ class ROLR(Loss):
             output.target.label * torch.exp(log_ratio_pred), output.target.label * ratio
         )
         return loss + loss_inv
+
+
+# Implementation of the derivative learning loss
+class DerivativeLoss(Loss):
+    REQUIRES_SCORE = True
+
+    @classmethod
+    def forward(cls, output, **kwds):
+        pass

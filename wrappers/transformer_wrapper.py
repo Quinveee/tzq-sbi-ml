@@ -120,26 +120,41 @@ class LocalTransformerWrapper(BaseTransformerWrapper):
         self,
         tokens: torch.Tensor,
         preprocessed: torch.Tensor | None = None,
+        met: torch.Tensor | None = None,
         ptr: torch.Tensor | None = None,
         **kwds,
     ) -> torch.Tensor:
         """
-        Optionally append preprocessed event-level features to every particle token.
+        Optionally append preprocessed event-level features and/or MET
+        to every particle token.
 
         :param tokens: Particle four momenta
         :type tokens: torch.Tensor
-        :param kwds:
+        :param preprocessed: Event-level preprocessed features
+        :type preprocessed: torch.Tensor | None
+        :param met: Event-level MET features (pt, phi)
+        :type met: torch.Tensor | None
+        :param ptr: Event pointer
+        :type ptr: torch.Tensor | None
         :return: Particle tokens with optional extra conditioning channels
         :rtype: torch.Tensor
         """
-        if preprocessed is None or preprocessed.shape[-1] == 0:
+        extra = []
+
+        if preprocessed is not None and preprocessed.shape[-1] > 0:
+            if ptr is None:
+                raise ValueError("ptr is required when using preprocessed features")
+            extra.append(self._repeat_event_features(preprocessed, ptr))
+
+        if met is not None and met.shape[-1] > 0:
+            if ptr is None:
+                raise ValueError("ptr is required when using MET features")
+            extra.append(self._repeat_event_features(met, ptr))
+
+        if not extra:
             return tokens
 
-        if ptr is None:
-            raise ValueError("ptr is required when using preprocessed features")
-
-        preprocessed = self._repeat_event_features(preprocessed, ptr)
-        return torch.cat((preprocessed, tokens), dim=-1)
+        return torch.cat(extra + [tokens], dim=-1)
 
 
 class ParametrizedTransformerWrapper(BaseTransformerWrapper):
@@ -149,12 +164,13 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         theta: torch.Tensor,
         ptr: torch.Tensor,
         preprocessed: torch.Tensor | None = None,
+        met: torch.Tensor | None = None,
         **kwds,
     ) -> torch.Tensor:
         """
         Concatenate particles fourmomenta with theory parameters and optional
-        preprocessed event-level features. Event-level conditioning vectors are
-        repeated for each particle in the corresponding event.
+        preprocessed event-level features / MET. Event-level conditioning vectors
+        are repeated for each particle in the corresponding event.
 
         :param particles: Particles fourmomenta with size: (num particles, 4)
         :type particles: torch.Tensor
@@ -162,8 +178,11 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         :type theta: torch.Tensor
         :param ptr: Event pointer with size: (batch size + 1,)
         :type ptr: torch.Tensor
-        :param kwds: Description
-        :return: Concatenated tensors with size: (num particles, 4 + theta dim + n_preprocessed)
+        :param preprocessed: Event-level preprocessed features
+        :type preprocessed: torch.Tensor | None
+        :param met: Event-level MET features (pt, phi)
+        :type met: torch.Tensor | None
+        :return: Concatenated tensors with size: (num particles, 4 + theta dim + extras)
         :rtype: Tensor
 
         """
@@ -183,6 +202,11 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
             preprocessed = self._repeat_event_features(preprocessed, ptr)
             conditioning.append(preprocessed)
             conditioning_dim += preprocessed.shape[-1]
+
+        if met is not None and met.shape[-1] > 0:
+            met = self._repeat_event_features(met, ptr)
+            conditioning.append(met)
+            conditioning_dim += met.shape[-1]
 
         tokens = torch.cat(conditioning + [particles], dim=-1)
 
