@@ -17,7 +17,6 @@ setup_env() {
 
 setup_env
 
-
 TARBALL="$1"
 tar -xzf "$TARBALL"
 

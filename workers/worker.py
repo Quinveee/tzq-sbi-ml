@@ -13,7 +13,8 @@ if TYPE_CHECKING:
 
 # The worker spawns a new python process, so any needed resolvers from now on
 # must be registerd here (doing that in main.py won't work)
-OmegaConf.register_new_resolver("sum", lambda x, y: x + y)
+if not OmegaConf.has_resolver("sum"):
+    OmegaConf.register_new_resolver("sum", lambda *values: sum(values))
 
 
 def run(cfg: DictConfig) -> None:

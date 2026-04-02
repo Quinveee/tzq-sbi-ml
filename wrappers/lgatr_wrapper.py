@@ -52,6 +52,40 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
     def embed_mv(self, *args, **kwargs):
         pass
 
+    @staticmethod
+    def _expand_event_scalars(
+        scalars: Optional[Tensor],
+        ptr: Tensor,
+        *,
+        mode: Literal["tokens", "channels"],
+        theta_dim: int,
+    ) -> Optional[Tensor]:
+        """
+        Expand event-level scalar features from shape (batch, s_dim) to token-level
+        shape (1, n_tokens, s_dim), matching LGATr's flattened token representation.
+        """
+        if scalars is None:
+            return None
+
+        if scalars.ndim == 3:
+            return scalars
+
+        if scalars.ndim == 1:
+            scalars = scalars.unsqueeze(-1)
+
+        if scalars.ndim != 2:
+            raise ValueError(
+                f"Expected scalars with shape (batch, s_dim) or (1, n_tokens, s_dim), got {scalars.shape}"
+            )
+
+        ptr = ptr.long()
+        repeats = ptr[1:] - ptr[:-1]
+        if mode == "tokens":
+            repeats = repeats + theta_dim
+
+        expanded = scalars.repeat_interleave(repeats, dim=0)
+        return expanded.unsqueeze(0)
+
     def forward(
         self,
         particles: Tensor,
@@ -90,6 +124,15 @@ class BaseLGATrWrapper(BaseWrapper, ABC):
 
         mode = embedding_kwargs.get("mode", self.mode)
         theta_dim = embedding_kwargs.get("theta_dim", 0)
+
+        scalars = self._expand_event_scalars(
+            scalars,
+            ptr,
+            mode=mode,
+            theta_dim=theta_dim,
+        )
+        if scalars is not None and scalars.shape[-1] == 0:
+            scalars = None
 
         # Create masking matrix for self-attention
         index = ptr2index(ptr, mode=mode, theta_dim=theta_dim)

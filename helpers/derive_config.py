@@ -65,6 +65,18 @@ def derive_config(cfg: DictConfig) -> DictConfig:
     # For example, experiment=local and model=lgatr
     # will correspond to ExperimentLocalParticles and LocalLGATrWrapper
     model_key = cfg.model.key if cfg.model.key else "noop"
+    use_preprocessed = bool(cfg.data.get("preprocessed", False))
+    n_preprocessed_features = int(cfg.data.get("n_preprocessed_features", 0) or 0)
+
+    if use_preprocessed and n_preprocessed_features <= 0:
+        raise ValueError(
+            "When data.preprocessed=true, data.n_preprocessed_features must be > 0"
+        )
+
+    if use_preprocessed and model_key not in ("transformer", "lgatr"):
+        raise ValueError(
+            "data.preprocessed=true is only supported for model=transformer or model=lgatr"
+        )
 
     # Transformer can optionally consume feature-level data instead of particles.
     # We keep backwards compatibility by defaulting to particles when unset.
@@ -85,6 +97,25 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         exp_model_key = f"{exp_model_key}_features"
 
     cfg.merge_with(load_conf_from(auto_dir / "exp_model" / exp_model_key))
+
+    # Optionally inject engineered, preprocessed event-level features.
+    # Transformer consumes them as extra per-particle channels (same conditioning
+    # style as theta), while LGATr consumes them as scalar channels.
+    if use_preprocessed and model_key == "transformer":
+        if transformer_input != "particles":
+            raise ValueError(
+                "data.preprocessed=true is only supported with model.input_level=particles"
+            )
+
+        # `dim_in` may come from an interpolation such as `${sum:...}`.
+        # Resolve it before applying the preprocessed-feature increment.
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        dim_in = int(resolved_net["dim_in"])
+        cfg.model.net.dim_in = dim_in + n_preprocessed_features
+
+    if use_preprocessed and model_key == "lgatr":
+        cfg.model.net.in_s_channels = n_preprocessed_features
+        cfg.model.net.out_s_channels = n_preprocessed_features
 
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and
@@ -119,6 +150,9 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         lloca_cfg = cfg.model.get("LLoCa", {})
         if lloca_cfg.get("active", False):
             run_model_key = f"{model_key}_lloca"
+
+    if use_preprocessed and model_key in ("transformer", "lgatr"):
+        run_model_key = f"{run_model_key}_preprocessed"
 
     cfg.data.run_model_key = run_model_key
     cfg.data.run_dir = (

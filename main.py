@@ -26,6 +26,10 @@ OmegaConf.register_new_resolver(
     lambda key: {"prefix": Path(sys.executable).parent, "cwd": os.getcwd()}.get(key),
 )
 
+# Support numeric interpolation used in config files, e.g. `${sum:${dataset.theta_dim},4}`.
+if not OmegaConf.has_resolver("sum"):
+    OmegaConf.register_new_resolver("sum", lambda *values: sum(values))
+
 
 @hydra.main(config_name="config", config_path="conf", version_base=None)
 def main(cfg: DictConfig) -> None:

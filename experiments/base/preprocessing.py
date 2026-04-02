@@ -199,7 +199,7 @@ class BasePreprocessing:
         eta_std = np.std(part_eta, axis=1, keepdims=True)
         phi_std = np.std(part_phi, axis=1, keepdims=True)
 
-        if use_met:
+        if met:
             met_pt_feat = met_pt
             met_phi_feat = met_phi
 

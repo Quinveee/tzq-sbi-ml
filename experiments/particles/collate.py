@@ -22,7 +22,7 @@ def _collate_particles_common(
     flattened into one. A pointer is also return to later divide the particles
     into events
     """
-    particles_list, lengths_list, scores_list = [], [], []
+    particles_list, lengths_list, scores_list, preprocessed_list = [], [], [], []
     extra_lists = {attr: [] for attr in (extra_attrs or [])}
 
     for event in batch:
@@ -32,6 +32,7 @@ def _collate_particles_common(
 
         lengths_list.append(event.length)
         scores_list.append(torch.from_numpy(event.score))
+        preprocessed_list.append(torch.from_numpy(event.preprocessed))
         for attr in extra_lists:
             extra_lists[attr].append(torch.from_numpy(getattr(event, attr)))
 
@@ -42,10 +43,11 @@ def _collate_particles_common(
 
     particles = torch.cat(particles_list, dim=0)
     scores = torch.stack(scores_list, dim=0)
+    preprocessed = torch.stack(preprocessed_list, dim=0)
 
     extras = {attr: torch.stack(lst, dim=0) for attr, lst in extra_lists.items()}
 
-    return particles, ptr, scores, extras
+    return particles, ptr, scores, preprocessed, extras
 
 
 # TODO: old collate function, to be removed once LLoCa-specific collate path is fully implemented
@@ -71,10 +73,15 @@ def collate_particles_fn(batch: Iterable[ParticlesEvent], lloca: bool = False) -
     :rtype: ParticleBatch
     """
     if lloca:
-        particles, ptr, score, _ = _collate_particles_lloca(batch)
+        particles, ptr, score, preprocessed, _ = _collate_particles_lloca(batch)
     else:
-        particles, ptr, score, _ = _collate_particles_common(batch)
-    return ParticleBatch(particles=particles, ptr=ptr, score=score)
+        particles, ptr, score, preprocessed, _ = _collate_particles_common(batch)
+    return ParticleBatch(
+        particles=particles,
+        ptr=ptr,
+        score=score,
+        preprocessed=preprocessed,
+    )
 
 
 def parametrized_collate_particles_fn(
@@ -88,17 +95,18 @@ def parametrized_collate_particles_fn(
     :type batch: Iterable[ParametrizedParticlesEvent]
     """
     if lloca:
-        particles, ptr, score, extras = _collate_particles_lloca(
+        particles, ptr, score, preprocessed, extras = _collate_particles_lloca(
             batch, extra_attrs=["theta", "ratio", "label"]
         )
     else:
-        particles, ptr, score, extras = _collate_particles_common(
+        particles, ptr, score, preprocessed, extras = _collate_particles_common(
             batch, extra_attrs=["theta", "ratio", "label"]
         )
     return ParametrizedParticleBatch(
         particles=particles,
         ptr=ptr,
         score=score,
+        preprocessed=preprocessed,
         theta=extras["theta"],
         ratio=extras["ratio"],
         label=extras["label"],
