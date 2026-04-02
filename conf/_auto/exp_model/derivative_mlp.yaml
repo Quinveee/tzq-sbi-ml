@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.features.ratios.ExperimentRatiosFeatures
+model:
+  _target_: wrappers.mlp_wrapper.ParametrizedMLPWrapper
+  net:
+    n_parameters: ${dataset.theta_dim}
+    dim_out: 1

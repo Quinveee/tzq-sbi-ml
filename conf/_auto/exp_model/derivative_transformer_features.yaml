@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.features.ratios.ExperimentRatiosFeatures
+model:
+  _target_: wrappers.transformer_wrapper.ParametrizedTransformerFeaturesWrapper
+  net:
+    dim_in: ${sum:${dataset.theta_dim},1}
+    dim_out: 1

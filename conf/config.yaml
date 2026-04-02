@@ -37,6 +37,6 @@ data:
   run_dir_base: run_dirs
   run_dir: ${.run_dir_base}/${dataset.key}/${exp.key}/${model.key}/${.run}
   model: null  # For preprocessing: which model to use (MIParT or ParT)
-  met: false  # Whether source data contains MET features
+  met: true  # Whether source data contains MET features
   preprocessed: false  # Whether to use preprocessed high-level features (hlvl)
   n_preprocessed_features: 14  # Number of preprocessed features (10 high-level + 4 jet scores)

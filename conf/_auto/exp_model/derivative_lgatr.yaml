@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.particles.ratios.ExperimentRatiosParticles
+model:
+  _target_: wrappers.lgatr_wrapper.ParametrizedLGATrWrapper
+  net:
+    in_mv_channels: ${sum:${dataset.theta_dim},1}
+    out_mv_channels: ${sum:${dataset.theta_dim},1}

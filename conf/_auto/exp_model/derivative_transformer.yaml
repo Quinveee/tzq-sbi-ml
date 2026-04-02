@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.particles.ratios.ExperimentRatiosParticles
+model:
+  _target_: wrappers.transformer_wrapper.ParametrizedTransformerWrapper
+  net:
+    dim_in: ${sum:${dataset.theta_dim},4}
+    dim_out: 1
