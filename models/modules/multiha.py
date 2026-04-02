@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .lorentz import lloca_dot_product_attention   # ← new import
+from .lorentz import lloca_dot_product_attention
 
 if TYPE_CHECKING:
     from ..configs import SAConfig
@@ -30,18 +30,16 @@ class MultiHA(nn.Module):
         b, e = x.size()
         assert e == self.config.emb_size
 
-        # ── Unpack LLoCa config ──────────────────────────────────────────────
         lloca = False
-        lloca_frames = lloca_frames_inv = None
         lloca_num_scalars = lloca_num_vectors = 0
-        frames = frames_inv = None
+        frames = inv_frames = None
 
         if attn_kwargs:
             lloca = attn_kwargs.get("lloca", False)
             lloca_num_scalars = attn_kwargs.get("lloca_num_scalars", 0)
             lloca_num_vectors = attn_kwargs.get("lloca_num_vectors", 0)
             frames = attn_kwargs.get("frames", None)
-            frames_inv = attn_kwargs.get("frames_inv", None)
+            inv_frames = attn_kwargs.get("inv_frames", None)
 
         b, e = x.size()
 
@@ -98,20 +96,11 @@ class MultiHA(nn.Module):
                 frames=frames,
                 n_scalars=lloca_num_scalars,
                 n_vectors=lloca_num_vectors,
-                attn_mask=attn_mask
+                attn_mask=attn_mask,
+                inv_frames=inv_frames,
+                dropout_p=self.config.dropout_p if self.training else 0.0,
+                training=self.training,
             )
-            # Optional: secondary invariant-frame contribution
-            # (frames_inv provides an alternative neighbourhood basis;
-            #  add its contribution with its own scalar/vector split if desired)
-            if frames_inv is not None and frames_inv is not frames:
-                out = out + lloca_dot_product_attention(
-                    query, key, value,
-                    frames=frames_inv,
-                    n_scalars=lloca_num_scalars,
-                    n_vectors=lloca_num_vectors,
-                    attn_mask=attn_mask
-                )
-                out = out * 0.5   # average the two contributions
         else: 
             # Scaled dot-product attention with optional attn mask and dropout
             out = F.scaled_dot_product_attention(

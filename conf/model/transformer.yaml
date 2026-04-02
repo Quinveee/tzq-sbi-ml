@@ -7,10 +7,13 @@ input_level: particles # particles|features
 
 LLoCa:
   active: false # whether to make the data lorentz equivariant
-  LLoCa_frames: 5
-  LLoCa_frames_inv: 5
+  LLoCa_frames: 5 # retained for backwards compatibility (unused by learnable frame path)
   LLoCa_num_scalars: 4
   LLoCa_num_vectors: 4
+  LLoCa_frame_hidden: 128
+  LLoCa_frame_layers: 2
+  LLoCa_eps: 1e-8
+  LLoCa_use_float64: true
 
 net:
   _target_: models.transformer.Transformer

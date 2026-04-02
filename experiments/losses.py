@@ -112,11 +112,8 @@ class JointLoss(Loss):
         lambda_score = kwds.get("lambda_score", 1.0)
         log_r_clip = kwds.get("log_r_clip", 10.0)
 
-        # Ratio term: standard ROLR loss
         l_ratio = ROLR.forward(output, log_r_clip=log_r_clip)
 
-        # Score term: MSE between predicted score (d log r / d theta) and true score
-        # Masked to denominator samples (label=0) where the score is well-defined
         # TODO: maybe add score normalization to stabalize the score further
         l_score = F.mse_loss(
             (1.0 - output.target.label) * output.pred.score,
