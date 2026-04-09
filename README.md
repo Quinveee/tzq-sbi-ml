@@ -110,6 +110,28 @@ python main.py exp=local,ratio model=lgatr,transformer dataset=3d -m
 ```
 The above will create a 2x2 experiment grid and run each combination serially.
 
+## W&B parameter sweeps
+The `exp=sweep` configuration launches a native Weights & Biases sweep agent and runs
+trials through the same experiment codepaths used by standard runs.
+
+1. Edit `conf/exp/sweep.yaml`:
+	- `sweep.target` selects the base setup (`exp`, `model`, `dataset`, `launcher`).
+	- `sweep.fixed` sets overrides shared by every trial.
+	- `sweep.spec.parameters` defines the search space (use dotted config paths like `train.lr`).
+2. Ensure your W&B credentials are available (for example `WANDB_API_KEY`).
+3. Start the sweep agent:
+
+```bash
+python main.py exp=sweep model=noop dataset=1d
+```
+
+Notes:
+- `model=noop` is expected for the sweep orchestrator itself; each trial model comes from `sweep.target.model`.
+- `sweep.target.launcher` must be `local` so each trial runs inside the W&B agent process.
+- To sweep multiple model families in one run, set `spec.parameters.model.key.values` (for example `[mlp, transformer]`).
+- To resume an existing sweep, set `sweep.id=<existing_sweep_id>`.
+- The optimization metric defaults to `loss/val_best`, logged by ML experiments.
+
 ## HTCondor integration
 We provide a [HTCondor](https://htcondor.org/) launcher to run the experiments. To use it, just specify the option `launcher=htcondor` (default is `local`). For example
 ```bash

@@ -1,0 +1,64 @@
+defaults: 
+  - _base
+  - _self_
+
+key: sweep
+
+sweep:
+  # Wandb project for the sweep and trials.
+  project: tzq-sbi-ml
+  entity: null
+
+  # Number of trials to execute with this agent process.
+  # Set to null to keep pulling jobs until interrupted.
+  count: 20
+
+  # Optional existing sweep id to resume. Keep null to create a new sweep.
+  id: null
+
+  # Extra tags attached to each trial run.
+  tags: [hydra, sweep]
+
+  # Base experiment setup each trial will run.
+  # This re-composes conf/exp, conf/model, conf/dataset, and conf/launcher.
+  # Launcher must currently be local so trials run inside the sweep agent process.
+  target:
+    exp: ratio
+    model: transformer
+    dataset: 1d
+    launcher: local
+
+  # Static overrides applied to every trial.
+  # Use dotted keys to target any Hydra/OmegaConf path.
+  fixed:
+    modes.train: true
+    modes.eval: false
+    modes.plot: false
+    train.epochs: 20
+    modes.recycle: false
+
+  # Native wandb sweep specification.
+  # Parameter names are dotted config paths and are directly applied to cfg.
+  spec:
+    name: ratio-multi-model-1d
+    method: bayes
+    metric:
+      name: loss/val_best
+      goal: minimize
+    parameters:
+      model.key:
+        values: [lgatr, transformer]
+      train.lr:
+        distribution: log_uniform_values
+        min: 0.0001
+        max: 0.01
+      train.batch_size:
+        values: [128, 256, 512]
+      train.dropout:
+        distribution: uniform
+        min: 0.05
+        max: 0.2
+      train.lr_warmup:
+        values: [0, 1, 2, 4]
+      train.clip_grad_norm:
+        values: [1, 2, 5]

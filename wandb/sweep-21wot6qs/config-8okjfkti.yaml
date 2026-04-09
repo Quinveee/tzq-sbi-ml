@@ -1,0 +1,14 @@
+wandb_version: 1
+
+model.key:
+  value: lgatr
+train.batch_size:
+  value: 128
+train.clip_grad_norm:
+  value: 1
+train.dropout:
+  value: 0.14797801700475166
+train.lr:
+  value: 0.0011259146906948288
+train.lr_warmup:
+  value: 1

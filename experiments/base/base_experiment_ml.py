@@ -255,22 +255,38 @@ class BaseExperimentML(BaseExperiment):
 
         # Weights & Biases
         use_wandb = self.cfg.modes.get("wandb", False)
+        created_wandb_run = False
         if use_wandb:
             run_model_key = self._resolve_run_model_key()
             run_name = (
                 f"{self.cfg.dataset.key}/{self.cfg.exp.key}/{run_model_key}/run{self.cfg.data.run}"
             )
-            wandb.login()  # reads WANDB_API_KEY env var automatically
-            wandb.init(
-                project="tzq-sbi-ml",
-                name=run_name,
-                config=OmegaConf.to_container(self.cfg, resolve=False),
-                dir="runs/",
-            )
+            if wandb.run is None:
+                wandb.login()  # reads WANDB_API_KEY env var automatically
+                wandb.init(
+                    project="tzq-sbi-ml",
+                    name=run_name,
+                    config=OmegaConf.to_container(self.cfg, resolve=False),
+                    dir="runs/",
+                )
+                created_wandb_run = True
+            else:
+                wandb.config.update(
+                    OmegaConf.to_container(self.cfg, resolve=False),
+                    allow_val_change=True,
+                )
+                if not wandb.run.name:
+                    wandb.run.name = run_name
+            # init lazy mopdules w. dummy batch
+            with torch.no_grad():
+                dummy = next(iter(self.train_loader))
+                self.model(dummy)
+                
             wandb.summary["n_parameters"] = sum(p.numel() for p in self.model.parameters())
 
         # Training loop
         global_step = 0
+        best_val_loss = float("inf")
 
         for e in range(self.cfg.train.epochs):
             self.model.train()
@@ -357,11 +373,18 @@ class BaseExperimentML(BaseExperiment):
             print(f"Epoch {e+1}/{self.cfg.train.epochs} - val loss: {avg_val_loss:.4f}")
             writer.add_scalar("Loss/val_epoch", avg_val_loss, e + 1)
             if use_wandb:
-                wandb.log({"loss/val_epoch": avg_val_loss}, step=global_step)
+                best_val_loss = min(best_val_loss, avg_val_loss)
+                wandb.log(
+                    {
+                        "loss/val_epoch": avg_val_loss,
+                        "loss/val_best": best_val_loss,
+                    },
+                    step=global_step,
+                )
             val_losses.append(avg_val_loss)
 
         writer.close()
-        if use_wandb:
+        if use_wandb and created_wandb_run:
             wandb.finish()
 
         return self.model.state_dict(), Losses(train=train_losses, val=val_losses)

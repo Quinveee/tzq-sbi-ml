@@ -268,6 +268,11 @@ class BasePreprocessing:
             met_mT
         ], axis=-1)
 
+        # TODO: maybe try a different normalization strategy for the high level features
+        # Normalize features between 0 and 1 to stabalize model training, using min-max normalization
+        X = (X - np.min(X, axis=0)) / (np.max(X, axis=0) - np.min(X, axis=0) + 1e-8)
+        high_level_features = (high_level_features - np.min(high_level_features, axis=0)) / (np.max(high_level_features, axis=0) - np.min(high_level_features, axis=0) + 1e-8)
+
         return X, high_level_features
 
 
