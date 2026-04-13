@@ -22,11 +22,13 @@ description:
   requirements: 'regexp("V100", TARGET.GPUs_DeviceName)'
   getenv: True
 
-# there are 3 job categories: 
+# there are 3 job categories:
 # express - 10 minutes
 # short - 4 hours
 # medium - 22-24 hours
 # long - 96 hours
+# Override from CLI with e.g. `launcher.job_category=long`.
+job_category: short
 description_addition:
   +UseOS: '"el9"'
-  +JobCategory: '"short"'
+  +JobCategory: '"${launcher.job_category}"'

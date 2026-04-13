@@ -22,7 +22,7 @@ net:
 train:
   lr: 2e-4 # used in original LGATr paper 
   epochs: 10 # arcturo used 10
-  dropout: 0.1
+  dropout: 0.2
   lr_warmup: 0
   batch_size: 256 # arcturo used 50
   clip_grad_norm: 1

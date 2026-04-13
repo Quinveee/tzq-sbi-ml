@@ -48,7 +48,11 @@ def _tarball(cfg: DictConfig) -> Path:
 
 
 def launch(
-    *, description: DictConfig, description_addition: DictConfig = {}, cfg: DictConfig
+    *,
+    description: DictConfig,
+    description_addition: DictConfig = {},
+    cfg: DictConfig,
+    **_,
 ):
     """
     Launch a condor job with parameters specified in cfg and the tarball with the

@@ -18,7 +18,7 @@ train:
   epochs: 10 # arcturo used 10
   dropout: 0.2
   lr_warmup: 0
-  batch_size: 64 # arcturo used 50
+  batch_size: 32 # arcturo used 50
   clip_grad_norm: 1
   validation_split: 0.2
   clamp_samples: null
