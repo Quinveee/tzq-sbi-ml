@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import torch
 
 from ..base.base_experiment_ratios import BaseExperimentRatios
 from .collate import parametrized_collate_particles_fn
@@ -114,6 +115,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
             )
         raise ValueError(f"Invalid mode {mode}")
 
+    @torch.enable_grad()
     def _preds(self, batch: ParametrizedParticleBatch):
         """
         Return model predictions

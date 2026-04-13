@@ -33,8 +33,8 @@ class ParametrizedFeaturesDataset(FeaturesDataset):
     Parametrized features dataset
     """
 
-    def __init__(self, x, theta, score=None, ratio=None, labels=None):
-        super().__init__(x, score)
+    def __init__(self, x, theta, score=None, ratio=None, labels=None, **kwargs):
+        super().__init__(x, score, **kwargs)
         ratio = ratio if ratio is not None else np.zeros((len(x), 1))
         labels = labels if labels is not None else np.zeros((len(x), 1))
 

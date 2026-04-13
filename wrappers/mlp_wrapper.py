@@ -5,7 +5,6 @@ MLP wrappers
 from abc import ABC, abstractmethod
 import torch
 from .base_wrapper import BaseWrapper
-from lloca.
 
 class MLPWrapper(BaseWrapper, ABC):
     """

@@ -25,8 +25,8 @@ description:
 # there are 3 job categories: 
 # express - 10 minutes
 # short - 4 hours
-# medium - 22 hours
+# medium - 22-24 hours
 # long - 96 hours
 description_addition:
   +UseOS: '"el9"'
-  +JobCategory: '"medium"'
+  +JobCategory: '"short"'

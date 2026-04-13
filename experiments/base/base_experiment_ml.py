@@ -4,6 +4,7 @@ Base experiment class for all ML-based experiments
 
 from __future__ import annotations
 
+import random
 from abc import abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
@@ -64,6 +65,8 @@ class BaseExperimentML(BaseExperiment):
             "dtype": dtype(self.cfg.devices.dtype),
             "non_blocking": self.cfg.devices.non_blocking,
         }
+        self._seed: Optional[int] = None
+        self._generator: Optional[torch.Generator] = None
 
     ## Following abstract methods are to be implemented by subclasses ##
 
@@ -87,11 +90,33 @@ class BaseExperimentML(BaseExperiment):
         The order of the resting methods is irrelevant
 
         """
+        self.init_seed()
         self.init_loss_function()
         self.init_model()
         self.init_normalizer()
         self.init_datasets()
         self.init_loaders()
+
+    def init_seed(self) -> None:
+        """
+        Seed all RNGs (python, numpy, torch CPU/CUDA) from ``cfg.data.run`` so
+        weight init, train/val split and shuffle order are reproducible across
+        runs and identical between runs that share the same ``data.run`` value.
+        A non-integer ``data.run`` (e.g. wandb run id) is hashed deterministically.
+        """
+        raw = self.cfg.data.get("run", 0)
+        try:
+            seed = int(raw)
+        except (TypeError, ValueError):
+            seed = abs(hash(str(raw))) % (2**32)
+        self._seed = seed
+        self._generator = torch.Generator().manual_seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        LOGGER.info(f"Set RNG seed to {seed} (data.run={raw})")
 
     def _run(self) -> None:
         """
@@ -149,13 +174,19 @@ class BaseExperimentML(BaseExperiment):
         split = self.cfg.train.validation_split
         assert 0.0 < split < 0.5, f"Validation split {split} seems wrong"
 
-        # Split manually
+        # Split manually (use seeded generator so split is reproducible per run)
+        split_gen = (
+            torch.Generator().manual_seed(self._seed)
+            if self._seed is not None
+            else None
+        )
         self.train_dataset, self.val_dataset = random_split(
             dataset,
             [
                 int(len(dataset) * (1 - split)),
                 int(len(dataset) * split),
             ],
+            generator=split_gen,
         )
         self.test_dataset = self._load_dataset(raw, "test")
 
@@ -164,6 +195,11 @@ class BaseExperimentML(BaseExperiment):
         Create torch loaders for the different splits
 
         """
+        loader_gen = (
+            torch.Generator().manual_seed(self._seed)
+            if self._seed is not None
+            else None
+        )
         self.train_loader = DataLoader(
             self.train_dataset,
             batch_size=self.cfg.train.batch_size,
@@ -171,6 +207,7 @@ class BaseExperimentML(BaseExperiment):
             pin_memory=self.cfg.devices.pin_memory,
             collate_fn=self.collate_fn,
             num_workers=0,
+            generator=loader_gen,
         )
 
         self.val_loader = DataLoader(
@@ -277,10 +314,10 @@ class BaseExperimentML(BaseExperiment):
                 )
                 if not wandb.run.name:
                     wandb.run.name = run_name
-            # init lazy mopdules w. dummy batch
-            with torch.no_grad():
-                dummy = next(iter(self.train_loader))
-                self.model(dummy)
+            # Init lazy modules with one dummy batch through experiment-specific preds.
+            dummy = next(iter(self.train_loader))
+            dummy.to_(**self.device_kwds)
+            self._preds(dummy)
                 
             wandb.summary["n_parameters"] = sum(p.numel() for p in self.model.parameters())
 
@@ -389,7 +426,7 @@ class BaseExperimentML(BaseExperiment):
 
         return self.model.state_dict(), Losses(train=train_losses, val=val_losses)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def eval(self, loader: DataLoader) -> np.ndarray:
         """
         Evaluate loader and return predictions as a numpy array
@@ -535,14 +572,16 @@ class BaseExperimentML(BaseExperiment):
         factory_kwds = {"batch_size": 100, "collate_fn": self.collate_fn}
         assert self.dataset_cls is not None and self.normalizer is not None
         x = self.normalizer.transform(x)
+        ds_kwds = {"met": getattr(self, "_use_met", False)}
         if theta is None:
-            return [DataLoader(self.dataset_cls(x=x), **factory_kwds)]
+            return [DataLoader(self.dataset_cls(x=x, **ds_kwds), **factory_kwds)]
         return [
             DataLoader(
                 self.dataset_cls(
                     x=x,
                     # `copy()` is needed to create a writable array, not only a view
                     theta=np.broadcast_to(t, (x.shape[0], t.shape[-1])).copy(),
+                    **ds_kwds,
                 ),
                 **factory_kwds,
             )
