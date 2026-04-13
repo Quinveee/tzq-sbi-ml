@@ -5,6 +5,7 @@ the `hydra` configuration files.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -29,6 +30,11 @@ OmegaConf.register_new_resolver(
 # Support numeric interpolation used in config files, e.g. `${sum:${dataset.theta_dim},4}`.
 if not OmegaConf.has_resolver("sum"):
     OmegaConf.register_new_resolver("sum", lambda *values: sum(values))
+
+if not OmegaConf.has_resolver("prod"):
+    OmegaConf.register_new_resolver(
+        "prod", lambda *values: math.prod(int(v) for v in values)
+    )
 
 
 @hydra.main(config_name="config", config_path="conf", version_base=None)

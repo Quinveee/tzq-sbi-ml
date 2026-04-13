@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 if not OmegaConf.has_resolver("sum"):
     OmegaConf.register_new_resolver("sum", lambda *values: sum(values))
 
+if not OmegaConf.has_resolver("prod"):
+    import math as _math
+
+    OmegaConf.register_new_resolver(
+        "prod", lambda *values: _math.prod(int(v) for v in values)
+    )
+
 
 def run(cfg: DictConfig) -> None:
     """

@@ -73,9 +73,9 @@ def derive_config(cfg: DictConfig) -> DictConfig:
             "When data.preprocessed=true, data.n_preprocessed_features must be > 0"
         )
 
-    if use_preprocessed and model_key not in ("transformer", "lgatr"):
+    if use_preprocessed and model_key not in ("transformer", "lgatr", "cnf"):
         raise ValueError(
-            "data.preprocessed=true is only supported for model=transformer or model=lgatr"
+            "data.preprocessed=true is only supported for model=transformer, lgatr or cnf"
         )
 
     # Transformer can optionally consume feature-level data instead of particles.
@@ -117,6 +117,11 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         cfg.model.net.in_s_channels = n_preprocessed_features
         cfg.model.net.out_s_channels = n_preprocessed_features
 
+    # CNF uses LGATr as its encoder, so it shares the scalar-channel plumbing.
+    if use_preprocessed and model_key == "cnf":
+        cfg.model.net.in_s_channels = n_preprocessed_features
+        # Keep out_s_channels as defined in conf/model/cnf.yaml (it contributes to token_dim).
+
     # When MET features are present and preprocessed features are NOT used,
     # the raw MET (pt, phi) is fed directly to the model as 2 extra scalars.
     # (When preprocessed=true, MET-derived quantities are already part of the
@@ -138,6 +143,12 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         in_s = int(resolved_net.get("in_s_channels", 0))
         cfg.model.net.in_s_channels = in_s + n_met_features
         cfg.model.net.out_s_channels = in_s + n_met_features
+
+    if use_met and not use_preprocessed and model_key == "cnf":
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        in_s = int(resolved_net.get("in_s_channels", 0))
+        cfg.model.net.in_s_channels = in_s + n_met_features
+        # out_s_channels stays as-is so token_dim (derived from it) doesn't shift.
 
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and

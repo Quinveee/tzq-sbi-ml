@@ -1,0 +1,4 @@
+exp:
+  _target_: experiments.particles.cnf.ExperimentCNFParticles
+model:
+  _target_: wrappers.lgatr_cnf_wrapper.LGATrCNFWrapper

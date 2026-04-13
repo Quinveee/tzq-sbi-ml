@@ -41,5 +41,8 @@ class EquivariantNormalizer:
 
 
 def get_normalizer(model_name):
-    model2nom = {"lgatr": EquivariantNormalizer()}
+    model2nom = {
+        "lgatr": EquivariantNormalizer(),
+        "LGATrCNF": EquivariantNormalizer(),
+    }
     return model2nom.get(model_name, Normalizer())
