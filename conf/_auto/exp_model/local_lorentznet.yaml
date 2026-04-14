@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.particles.local.ExperimentLocalParticles
+model:
+  _target_: wrappers.lorentznet_wrapper.LocalLorentzNetWrapper
+  net:
+    n_scalar: 1
+    dim_out: ${dataset.theta_dim}

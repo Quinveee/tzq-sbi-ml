@@ -1,0 +1,24 @@
+defaults:
+  - _base
+  - _self_
+
+key: lorentznet
+
+net:
+  _target_: models.lorentznet.LorentzNet
+  n_scalar: ... # Dynamically derived
+  dim_out: ... # Dynamically derived
+  n_hidden: 72
+  n_layers: 6
+  c_weight: 5e-3
+  dropout: ${train.dropout}
+
+train:
+  lr: 1e-4
+  epochs: 10
+  dropout: 0.2
+  lr_warmup: 0
+  batch_size: 246
+  clip_grad_norm: 1
+  validation_split: 0.2
+  clamp_samples: null

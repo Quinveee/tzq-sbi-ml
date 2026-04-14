@@ -1,0 +1,7 @@
+exp:
+  _target_: experiments.particles.ratios.ExperimentRatiosParticles
+model:
+  _target_: wrappers.lorentznet_wrapper.ParametrizedLorentzNetWrapper
+  net:
+    n_scalar: ${sum:${dataset.theta_dim},1}
+    dim_out: 1

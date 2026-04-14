@@ -40,7 +40,7 @@ flow:
 
 train:
   lr: 2e-4
-  epochs: 10
+  epochs: 1
   dropout: 0.2
   lr_warmup: 0
   batch_size: 256

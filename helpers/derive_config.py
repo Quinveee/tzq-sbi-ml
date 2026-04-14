@@ -73,9 +73,9 @@ def derive_config(cfg: DictConfig) -> DictConfig:
             "When data.preprocessed=true, data.n_preprocessed_features must be > 0"
         )
 
-    if use_preprocessed and model_key not in ("transformer", "lgatr", "cnf"):
+    if use_preprocessed and model_key not in ("transformer", "lgatr", "cnf", "lorentznet"):
         raise ValueError(
-            "data.preprocessed=true is only supported for model=transformer, lgatr or cnf"
+            "data.preprocessed=true is only supported for model=transformer, lgatr, cnf or lorentznet"
         )
 
     # Transformer can optionally consume feature-level data instead of particles.
@@ -122,6 +122,13 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         cfg.model.net.in_s_channels = n_preprocessed_features
         # Keep out_s_channels as defined in conf/model/cnf.yaml (it contributes to token_dim).
 
+    # LorentzNet consumes preprocessed features as extra per-particle scalar
+    # channels, broadcast from event-level to particle-level in the wrapper.
+    if use_preprocessed and model_key == "lorentznet":
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        n_scalar = int(resolved_net["n_scalar"])
+        cfg.model.net.n_scalar = n_scalar + n_preprocessed_features
+
     # When MET features are present and preprocessed features are NOT used,
     # the raw MET (pt, phi) is fed directly to the model as 2 extra scalars.
     # (When preprocessed=true, MET-derived quantities are already part of the
@@ -149,6 +156,11 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         in_s = int(resolved_net.get("in_s_channels", 0))
         cfg.model.net.in_s_channels = in_s + n_met_features
         # out_s_channels stays as-is so token_dim (derived from it) doesn't shift.
+
+    if use_met and not use_preprocessed and model_key == "lorentznet":
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        n_scalar = int(resolved_net["n_scalar"])
+        cfg.model.net.n_scalar = n_scalar + n_met_features
 
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and
@@ -184,7 +196,7 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         if lloca_cfg.get("active", False):
             run_model_key = f"{model_key}_lloca"
 
-    if use_preprocessed and model_key in ("transformer", "lgatr"):
+    if use_preprocessed and model_key in ("transformer", "lgatr", "lorentznet"):
         run_model_key = f"{run_model_key}_preprocessed"
 
     cfg.data.run_model_key = run_model_key
