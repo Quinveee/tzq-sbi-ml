@@ -14,10 +14,12 @@ net:
   dropout: ${train.dropout}
 
 train:
-  lr: 3e-4
+  lr: 2e-4
   epochs: 10
   dropout: 0.2
   lr_warmup: 3
+  lr_min: 1e-2
+  weight_decay: 0.01
   batch_size: 64
   clip_grad_norm: 1
   validation_split: 0.2

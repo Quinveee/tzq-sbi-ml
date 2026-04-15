@@ -12,6 +12,8 @@ train:
   epochs: 10
   dropout: 0.1
   lr_warmup: 0
+  lr_min: 1e-2
+  weight_decay: 0.01
   batch_size: 50
   clip_grad_norm: 5
   validation_split: 0.2

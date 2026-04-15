@@ -267,7 +267,7 @@ class BaseExperimentML(BaseExperiment):
         :rtype: Tuple[Dict, Losses]
         """
         train_losses, val_losses = [], []
-        opt = torch.optim.Adam(params=self.model.parameters(), lr=self.cfg.train.lr)
+        opt = torch.optim.AdamW(params=self.model.parameters(), lr=self.cfg.train.lr, weight_decay=self.cfg.train.weight_decay)
         lr_sch = None
 
         # Optional linear warmup from a small LR to the configured base LR.
@@ -275,12 +275,23 @@ class BaseExperimentML(BaseExperiment):
         if warmup_epochs > 0:
             warmup_steps = max(1, warmup_epochs * len(self.train_loader))
             start_factor = 1.0 / warmup_steps
-            lr_sch = torch.optim.lr_scheduler.LinearLR(
+            lr_warmup = torch.optim.lr_scheduler.LinearLR(
                 opt,
                 start_factor=start_factor,
                 end_factor=1.0,
                 total_iters=warmup_steps,
             )
+            lr_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt,
+                T_max=self.cfg.train.epochs * len(self.train_loader) - warmup_steps,
+                eta_min=self.cfg.train.get("lr_min", 0.0) * self.cfg.train.lr,
+            )
+            lr_sch = torch.optim.lr_scheduler.SequentialLR(
+                opt,
+                schedulers=[lr_warmup, lr_cosine],
+                milestones=[warmup_steps],
+            )
+
             LOGGER.info(
                 "Using linear LR warmup for %d epochs (%d steps)",
                 warmup_epochs,
@@ -547,7 +558,11 @@ class BaseExperimentML(BaseExperiment):
             )
             x_train = self.normalizer.transform(x_train)
             LOGGER.info(f"Sampled {len(x_train)} train events")
-            train_dataset = self.dataset_cls(x=x_train, theta=theta_grid)
+            train_dataset = self.dataset_cls(
+                x=x_train,
+                theta=theta_grid,
+                met=getattr(self, "_use_met", False),
+            )
             train_loader = DataLoader(
                 train_dataset, batch_size=100, collate_fn=self.collate_fn
             )
