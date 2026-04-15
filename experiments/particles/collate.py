@@ -58,7 +58,7 @@ def _collate_particles_common(
     return particles, ptr, scores, preprocessed, met, extras
 
 
-# TODO: old collate function, to be removed once LLoCa-specific collate path is fully implemented
+# TODO: to be removed as LLoCa-specific collate path is fully implemented
 def _collate_particles_lloca(
     batch: Iterable[ParticlesEvent], extra_attrs: Optional[List[str]] = None
 ):

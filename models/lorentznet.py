@@ -113,25 +113,68 @@ def build_fully_connected_edges(ptr: torch.Tensor) -> tuple[torch.Tensor, torch.
     """Build fully-connected (no self-loops) edge indices per event in a batch
     of flattened particles described by `ptr`.
     """
+    # ptr_long = ptr.to(dtype=torch.long)
+    # lengths = ptr_long[1:] - ptr_long[:-1]
+    # device = ptr_long.device
+
+    # src_list, dst_list = [], []
+    # for start, n in zip(ptr_long[:-1].tolist(), lengths.tolist()):
+    #     if n <= 1:
+    #         continue
+    #     idx = torch.arange(start, start + n, device=device)
+    #     i = idx.repeat_interleave(n)
+    #     j = idx.repeat(n)
+    #     mask = i != j
+    #     src_list.append(i[mask])
+    #     dst_list.append(j[mask])
+
+    # if not src_list:
+    #     empty = torch.empty(0, dtype=torch.long, device=device)
+    #     return empty, empty
+    # return torch.cat(src_list), torch.cat(dst_list)
+
     ptr_long = ptr.to(dtype=torch.long)
     lengths = ptr_long[1:] - ptr_long[:-1]
     device = ptr_long.device
 
-    src_list, dst_list = [], []
-    for start, n in zip(ptr_long[:-1].tolist(), lengths.tolist()):
-        if n <= 1:
-            continue
-        idx = torch.arange(start, start + n, device=device)
-        i = idx.repeat_interleave(n)
-        j = idx.repeat(n)
-        mask = i != j
-        src_list.append(i[mask])
-        dst_list.append(j[mask])
+    # Keep only groups with n >= 2
+    mask_groups = lengths >= 2
+    starts = ptr_long[:-1][mask_groups]
+    ns = lengths[mask_groups]
 
-    if not src_list:
+    if ns.numel() == 0:
         empty = torch.empty(0, dtype=torch.long, device=device)
         return empty, empty
-    return torch.cat(src_list), torch.cat(dst_list)
+
+    # Each group contributes n*n pairs
+    pair_counts = ns * ns
+    total = int(pair_counts.sum())
+
+    # For every output position, figure out which group it belongs to
+    group_ids = torch.repeat_interleave(
+        torch.arange(ns.numel(), device=device), pair_counts
+    )
+
+    # Position within the group's n*n block
+    pair_offsets = torch.repeat_interleave(
+        torch.cat([torch.zeros(1, dtype=torch.long, device=device),
+                   pair_counts.cumsum(0)[:-1]]),
+        pair_counts,
+    )
+    local = torch.arange(total, device=device) - pair_offsets
+
+    n_per = ns[group_ids]
+    start_per = starts[group_ids]
+
+    # local = i_local * n + j_local
+    i_local = local // n_per
+    j_local = local %  n_per
+
+    src = start_per + i_local
+    dst = start_per + j_local
+
+    keep = i_local != j_local
+    return src[keep], dst[keep]  
 
 
 class LorentzNet(nn.Module):
@@ -190,6 +233,7 @@ class LorentzNet(nn.Module):
         for layer in self.LGEBs:
             h, x, _ = layer(h, x, edges, node_attr=scalars)
 
+        # Pool over particles in each event using the pointer, then apply graph decoder
         ptr_long = ptr.to(dtype=torch.long)
         index = torch.arange(
             ptr_long.numel() - 1, device=h.device

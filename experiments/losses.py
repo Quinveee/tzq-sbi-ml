@@ -45,7 +45,7 @@ class ALICES(Loss):
 
     @classmethod
     def forward(cls, output: ModelOutput, **kwds):
-        alpha = kwds.get("alpha", 5)
+        alpha = kwds.get("lambda_score", 1.0)
         s = torch.sigmoid(-torch.log(output.target.ratio))
         bce = F.binary_cross_entropy_with_logits(-output.pred.log_ratio, s)
         if alpha > 0:
@@ -125,7 +125,7 @@ class NLL(Loss):
         return -log_p.mean()
 
 
-# Implementation of the derivative learning loss
+# Alices but with Rolr-style score regularization, to be used with log-likelihood ratio regressors
 class JointLoss(Loss):
     REQUIRES_SCORE = True
 
