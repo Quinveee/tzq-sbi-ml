@@ -44,5 +44,6 @@ def get_normalizer(model_name):
     model2nom = {
         "lgatr": EquivariantNormalizer(),
         "LGATrCNF": EquivariantNormalizer(),
+        "transformer_lloca": EquivariantNormalizer(),
     }
     return model2nom.get(model_name, Normalizer())

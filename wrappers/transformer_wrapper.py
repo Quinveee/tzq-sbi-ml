@@ -35,7 +35,7 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         lloca_eps = float(lloca_config.get("LLoCa_eps", 1e-8))
         lloca_use_float64 = bool(lloca_config.get("LLoCa_use_float64", True))
 
-        kwds["key"] = "Transformer"
+        kwds["key"] = "transformer_lloca" if lloca else "Transformer"
         super().__init__(*args, **kwds)
 
         self.lloca = lloca
