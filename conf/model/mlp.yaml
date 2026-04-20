@@ -6,8 +6,8 @@ key: mlp
 
 net:
   _target_: models.mlp.MLP
-  n_observables: 33
-  k_hidden: 16 # arcturo used 4
+  n_observables: 35
+  k_hidden: 20 # arcturo used 4
   hidden_layers: 4 # arcturo used 2
   activation: gelu
   dropout: ${train.dropout}
@@ -15,12 +15,12 @@ net:
 
 train:
   lr: 2e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
-  epochs: 10 # arcturo used 10
-  dropout: 0.2
-  lr_warmup: 3
+  epochs: 30 # arcturo used 10
+  dropout: 0.1
+  lr_warmup: 10
   lr_min: 1e-2
-  weight_decay: 0.01
-  batch_size: 64 # arcturo used 50
+  weight_decay: 1e-4
+  batch_size: 128 # arcturo used 50
   clip_grad_norm: 1
   validation_split: 0.2
   clamp_samples: null

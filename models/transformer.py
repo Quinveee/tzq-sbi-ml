@@ -43,8 +43,8 @@ class Transformer(nn.Module):
     attention: Mapping,
     mlp: Mapping,
     dropout_p: float,
-    lloca_num_scalars: int = 0,   # ← add
-    lloca_num_vectors: int = 0,   # ← add
+    lloca_num_scalars: int = 0,
+    lloca_num_vectors: int = 0,
     ) -> None:
         super().__init__()
         emb_hidden = derive_emb_hidden(dim_in, emb_factor, attention.num_heads)
@@ -52,11 +52,14 @@ class Transformer(nn.Module):
         if lloca_num_vectors:
             emb_head = emb_hidden // attention.num_heads
             min_head = lloca_num_scalars + lloca_num_vectors * 4
-            assert emb_head >= min_head, (
-                f"LLoCa requires emb_head ({emb_head}) ≥ "
-                f"n_scalars + n_vectorsx4 = {min_head}. "
-                f"Increase emb_factor or reduce LLoCa vector channels."
-            )
+            if emb_head < min_head:
+                raise ValueError(
+                    "Invalid LLoCa attention setup: "
+                    f"emb_head={emb_head}, required={min_head} "
+                    f"(n_scalars={lloca_num_scalars}, n_vectors={lloca_num_vectors}). "
+                    "Increase emb_factor / embedding size, reduce num_heads, "
+                    "or reduce LLoCa scalar/vector channels."
+                )
 
         # configs
         attention = replace(

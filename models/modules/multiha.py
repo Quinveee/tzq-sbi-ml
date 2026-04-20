@@ -90,6 +90,18 @@ class MultiHA(nn.Module):
                     "Make sure build_lloca_frames() is called in the wrapper and "
                     "stored under attn_kwargs['frames']."
                 )
+
+            min_head = lloca_num_scalars + lloca_num_vectors * 4
+            if self.config.emb_head < min_head:
+                raise ValueError(
+                    "Invalid LLoCa attention setup: "
+                    f"emb_head={self.config.emb_head}, required={min_head} "
+                    f"(n_scalars={lloca_num_scalars}, n_vectors={lloca_num_vectors}, "
+                    f"emb_size={self.config.emb_size}, num_heads={self.config.num_heads}). "
+                    "Increase emb_factor / embedding size, reduce num_heads, "
+                    "or reduce LLoCa scalar/vector channels."
+                )
+
             # Primary attention using K frames
             out = lloca_dot_product_attention(
                 query, key, value,

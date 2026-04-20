@@ -47,6 +47,29 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         self.lloca_eps = lloca_eps
         self.lloca_use_float64 = lloca_use_float64
 
+        if self.lloca:
+            n_scalars = int(self.lloca_num_scalars or 0)
+            n_vectors = int(self.lloca_num_vectors or 0)
+            if n_vectors > 0:
+                sa_config = self.net.te_blocks[0].sa.config
+                emb_head = int(sa_config.emb_head)
+                emb_size = int(sa_config.emb_size)
+                num_heads = int(sa_config.num_heads)
+                required = n_scalars + n_vectors * 4
+
+                if emb_head < required:
+                    dim_in = int(self.net.linear_in.in_features)
+                    min_emb_size = required * num_heads
+                    min_emb_factor = (min_emb_size + dim_in - 1) // dim_in
+                    raise ValueError(
+                        "Invalid LLoCa configuration for Transformer: "
+                        f"emb_head={emb_head}, required={required} "
+                        f"(n_scalars={n_scalars}, n_vectors={n_vectors}, "
+                        f"emb_size={emb_size}, num_heads={num_heads}). "
+                        f"For dim_in={dim_in}, emb_factor must be at least {min_emb_factor} "
+                        "(or reduce num_heads / LLoCa channels)."
+                    )
+
         self.lloca_frame_predictor = None
         if self.lloca:
             self.lloca_frame_predictor = LLoCaFramePredictor(

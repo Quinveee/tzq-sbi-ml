@@ -8,19 +8,19 @@ net:
   _target_: models.lorentznet.LorentzNet
   n_scalar: ... # Dynamically derived
   dim_out: ... # Dynamically derived
-  n_hidden: 72
-  n_layers: 6
+  n_hidden: 128
+  n_layers: 13
   c_weight: 5e-3
   dropout: ${train.dropout}
 
 train:
   lr: 2e-4
-  epochs: 10
-  dropout: 0.05
-  lr_warmup: 3
+  epochs: 30
+  dropout: 0.1
+  lr_warmup: 10
   lr_min: 1e-2
   weight_decay: 1e-4
   batch_size: 128
-  clip_grad_norm: 10
+  clip_grad_norm: 1
   validation_split: 0.2
   clamp_samples: null

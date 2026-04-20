@@ -8,8 +8,8 @@ input_level: particles # particles|features
 LLoCa:
   active: false # whether to make the data lorentz equivariant
   LLoCa_frames: 5 # retained for backwards compatibility (unused by learnable frame path)
-  LLoCa_num_scalars: 4
-  LLoCa_num_vectors: 4
+  LLoCa_num_scalars: 3
+  LLoCa_num_vectors: 2
   LLoCa_frame_hidden: 128
   LLoCa_frame_layers: 5
   LLoCa_eps: 1e-8
@@ -19,8 +19,8 @@ net:
   _target_: models.transformer.Transformer
   dim_in: ... # Dynamically derived
   dim_out: ... # Dynamically derived
-  emb_factor: 128
-  num_blocks: 4
+  emb_factor: 20
+  num_blocks: 8
   dropout_p: ${train.dropout}
   attention:
     num_heads: 8
@@ -30,10 +30,10 @@ net:
     activation: relu
 
 train:
-  lr: 1e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
-  epochs: 10 # arcturo used 10
-  dropout: 0.05
-  lr_warmup: 3
+  lr: 2e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
+  epochs: 30 # arcturo used 10
+  dropout: 0.1
+  lr_warmup: 10
   lr_min: 1e-2 # note: the minimum=lr*lr_min
   weight_decay: 1e-4
   batch_size: 128  # arcturo used 50

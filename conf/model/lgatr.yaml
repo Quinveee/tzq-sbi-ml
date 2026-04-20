@@ -12,7 +12,7 @@ net:
   num_blocks: 8
   in_s_channels: 0
   out_s_channels: 0
-  hidden_mv_channels: 8
+  hidden_mv_channels: 20
   hidden_s_channels: 16
   dropout_prob: ${train.dropout}
   attention: 
@@ -21,12 +21,12 @@ net:
 
 train:
   lr: 2e-4 # used in original LGATr paper 
-  epochs: 10 # arcturo used 10
-  dropout: 0.2
-  lr_warmup: 3
+  epochs: 30 # arcturo used 10
+  dropout: 0.1
+  lr_warmup: 10
   lr_min: 1e-2
-  weight_decay: 0.01
-  batch_size: 64 # arcturo used 50
+  weight_decay: 1e-4
+  batch_size: 128 # arcturo used 50
   clip_grad_norm: 1
   validation_split: 0.2
   clamp_samples: null
