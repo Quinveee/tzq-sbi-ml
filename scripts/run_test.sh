@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Path to your Python interpreter bin/
-ENV=/data/atlas/users/qvanenge/miniforge/envs/ml/bin
+ENV=/home/qvengelen/.conda/envs/ml/bin/
 
 # The $ENV variable contains the bin/ directory of the Python interpreter we want to use
 # in the Working Node. The parent of bin/ is the conda env root.

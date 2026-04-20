@@ -1,0 +1,24 @@
+_target_: launchers.snellius.launch
+_partial_: true
+
+# Slurm launcher for Snellius.
+# Uses shared filesystem paths directly (no dataset tarball transfer).
+script: scripts/run_snellius.sh
+job_name: tzq-sbi
+partition: gpu_mig
+account: null
+qos: null
+time: "08:00:00"
+cpus_per_task: 4
+mem: 32G
+gpus: 1
+constraint: null
+output: logs/slurm-%j.out
+error: logs/slurm-%j.err
+
+# Export current shell environment to the job and optionally append variables from `env`.
+export_all_env: true
+env: {}
+
+# Extra raw sbatch arguments, e.g. ["--gres=gpu:a100:1"]
+extra_args: []

@@ -136,7 +136,6 @@ class JointLoss(Loss):
 
         l_ratio = ROLR.forward(output, log_r_clip=log_r_clip)
 
-        # TODO: maybe add score normalization to stabalize the score further
         l_score = F.mse_loss(
             (1.0 - output.target.label) * output.pred.score,
             (1.0 - output.target.label) * output.target.score,

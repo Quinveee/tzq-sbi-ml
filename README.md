@@ -57,13 +57,15 @@ tzq-sbi-ml/
 │   └── utils.py
 ├── helpers/                   # Utility helpers (config derivation, etc.)
 │   └── derive_config.py
-├── launchers/                 # Launcher implementations (local / HTCondor)
+├── launchers/                 # Launcher implementations (local / HTCondor / Slurm)
 │   ├── local.py
-│   └── htc.py
+│   ├── htc.py
+│   └── snellius.py
 ├── workers/                   # Worker-side execution utilities
 │   └── worker.py
 ├── scripts/                   # Convenience scripts and job files
 │   ├── run.sh
+│   ├── run_snellius.sh
 │   ├── run_test.sh
 │   ├── test.job
 │   └── test.py
@@ -142,3 +144,24 @@ This is specially powerful in combination with Hydra's multirun feature: you can
 python main.py exp=ratio,local model=mlp,transformer,lgatr dataset=1d,3d data.run=1,2,3 launcher=htcondor --multirun
 ```
 The `data.run` field just modifies the output directory, handy to run multiple identical runs.
+
+## Snellius (Slurm) integration
+We also provide a Slurm launcher for Snellius via `launcher=snellius`.
+Unlike HTCondor mode, this launcher does not transfer datasets to compute nodes: jobs read data directly from the shared filesystem paths in your config.
+
+Minimal example:
+```bash
+python main.py exp=ratio model=transformer dataset=3d launcher=snellius
+```
+
+Typical Snellius overrides:
+```bash
+python main.py exp=ratio model=transformer dataset=3d launcher=snellius \
+  launcher.account=<your_account> launcher.partition=gpu \
+  launcher.time=12:00:00 launcher.gpus=1 launcher.cpus_per_task=8 launcher.mem=64G
+```
+
+Notes:
+- The generated run configuration is written to `inputs/snellius_*.yaml`.
+- Worker logs are controlled by `launcher.output` and `launcher.error` (defaults: `logs/slurm-%j.out`, `logs/slurm-%j.err`).
+- The job script is `scripts/run_snellius.sh`, and can be customized through `launcher.script`.

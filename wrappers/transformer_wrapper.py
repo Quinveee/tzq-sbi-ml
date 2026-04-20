@@ -180,6 +180,10 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
                 # Canonicalize fourmomenta channels before entering the backbone.
                 tokens = canonicalize_input_fourmomenta(tokens, frames)
 
+                # TODO: consider normalizing the tokens here, but it may be better to let the model learn its own optimal normalization in the canonical frame.
+                # tokens = torch.nn.functional.layer_norm(tokens, tokens.shape[-1:])
+                # tokens = tokens / (tokens.norm(dim=-1, keepdim=True).clamp(min=1e-6))
+
         if self.lloca_num_scalars is not None:
             attn_kwargs["lloca_num_scalars"] = self.lloca_num_scalars
         if self.lloca_num_vectors is not None:

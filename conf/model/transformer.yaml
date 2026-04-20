@@ -11,7 +11,7 @@ LLoCa:
   LLoCa_num_scalars: 4
   LLoCa_num_vectors: 4
   LLoCa_frame_hidden: 128
-  LLoCa_frame_layers: 2
+  LLoCa_frame_layers: 5
   LLoCa_eps: 1e-8
   LLoCa_use_float64: true
 
@@ -19,8 +19,8 @@ net:
   _target_: models.transformer.Transformer
   dim_in: ... # Dynamically derived
   dim_out: ... # Dynamically derived
-  emb_factor: 64
-  num_blocks: 8
+  emb_factor: 128
+  num_blocks: 4
   dropout_p: ${train.dropout}
   attention:
     num_heads: 8
@@ -30,13 +30,13 @@ net:
     activation: relu
 
 train:
-  lr: 2e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
+  lr: 1e-4 # 2e-4 is reccomended by LLoCa paper, 0.001 is what arcturo used
   epochs: 10 # arcturo used 10
-  dropout: 0.2
+  dropout: 0.05
   lr_warmup: 3
-  lr_min: 1e-2
-  weight_decay: 0.01
-  batch_size: 64 # arcturo used 50
+  lr_min: 1e-2 # note: the minimum=lr*lr_min
+  weight_decay: 1e-4
+  batch_size: 128  # arcturo used 50
   clip_grad_norm: 1
   validation_split: 0.2
   clamp_samples: null

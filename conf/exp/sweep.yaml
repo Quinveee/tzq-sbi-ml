@@ -47,13 +47,13 @@ sweep:
       goal: minimize
     parameters:
       model.key:
-        values: [lgatr, transformer]
+        values: [transformer]
       train.lr:
         distribution: log_uniform_values
         min: 0.0001
         max: 0.01
       train.batch_size:
-        values: [128, 256, 512]
+        values: [64, 256, 512]
       train.dropout:
         distribution: uniform
         min: 0.05

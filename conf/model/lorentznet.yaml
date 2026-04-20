@@ -16,11 +16,11 @@ net:
 train:
   lr: 2e-4
   epochs: 10
-  dropout: 0.2
+  dropout: 0.05
   lr_warmup: 3
   lr_min: 1e-2
-  weight_decay: 0.01
-  batch_size: 64
-  clip_grad_norm: 1
+  weight_decay: 1e-4
+  batch_size: 128
+  clip_grad_norm: 10
   validation_split: 0.2
   clamp_samples: null

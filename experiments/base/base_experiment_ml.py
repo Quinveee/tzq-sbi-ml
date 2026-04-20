@@ -23,7 +23,7 @@ from ..logger import LOGGER as _LOGGER
 from ..plotting import plot_learning_curves
 from ..utils import device, dtype
 from .base_experiment import BaseExperiment
-from .normalizers import get_normalizer
+from .normalizers import Normalizer, get_normalizer
 from .schemas import Losses
 
 if TYPE_CHECKING:
@@ -56,6 +56,7 @@ class BaseExperimentML(BaseExperiment):
         super().__init__(*args, **kwds)
         self.model = None
         self.normalizer = None
+        self.score_normalizer: Optional[Normalizer] = None
         self.loss_fn: Optional[Loss] = None
         self.train_loader = self.val_loader = None
         self.train_dataset = self.val_dataset = None
