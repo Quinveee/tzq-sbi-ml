@@ -1,6 +1,5 @@
-# _target_: experiments.losses.JointLoss
-# lambda_score: 0.2
-# log_r_clip: 8.0
+_target_: experiments.losses.RASCAL
+lambda_score: 2.0
 
-_target_: experiments.losses.ALICES
-lambda_score: 1.0
+# _target_: experiments.losses.ALICES
+# lambda_score: 2.0

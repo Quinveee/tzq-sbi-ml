@@ -416,25 +416,39 @@ class BasePreprocessing:
         print(f"Loading data from {source}")
         x_train_ratio = np.load(source / "x_train_ratio.npy")
         x_train_score = np.load(source / "x_train_score.npy")
+        # Three distinct test samples that all need their own preprocessed
+        # features — x_test_hlvl.npy was previously only built from x_test.npy,
+        # so ratio/local eval was silently misaligned.
         x_test = np.load(source / "x_test.npy")
-        print(f"Train data shape: {x_train_ratio.shape}, Test data shape: {x_test.shape}")
+        x_test_ratio = np.load(source / "x_test_ratio.npy")
+        x_test_score = np.load(source / "x_test_score.npy")
+        print(
+            f"Train shapes: ratio={x_train_ratio.shape} score={x_train_score.shape}  "
+            f"Test shapes: sm={x_test.shape} ratio={x_test_ratio.shape} score={x_test_score.shape}"
+        )
 
-        if not met and (x_train_ratio.shape[1] % 4 != 0 or x_test.shape[1] % 4 != 0):
+        if not met and any(a.shape[1] % 4 != 0 for a in (x_train_ratio, x_test, x_test_ratio, x_test_score)):
             print("Possible MET features found in data but 'met' flag is not set. Please set 'met=True' to handle MET features.")
             x_train_ratio = x_train_ratio[:, :-2]
             x_train_score = x_train_score[:, :-2]
             x_test = x_test[:, :-2]
+            x_test_ratio = x_test_ratio[:, :-2]
+            x_test_score = x_test_score[:, :-2]
 
-        # Transform both train and test data
+        # Transform every split
         print(f"Transforming data...")
         train_ratio_inference_data, train_ratio_features = self._transform(x_train_ratio, met=met)
         train_score_inference_data, train_score_features = self._transform(x_train_score, met=met)
         test_inference_data, test_features = self._transform(x_test, met=met)
-        
+        test_ratio_inference_data, test_ratio_features = self._transform(x_test_ratio, met=met)
+        test_score_inference_data, test_score_features = self._transform(x_test_score, met=met)
+
         # Swap axes for model input (nsamples, n_features, max_particles)
         train_ratio_inference_data = train_ratio_inference_data.swapaxes(1, 2)
         train_score_inference_data = train_score_inference_data.swapaxes(1, 2)
         test_inference_data = test_inference_data.swapaxes(1, 2)
+        test_ratio_inference_data = test_ratio_inference_data.swapaxes(1, 2)
+        test_score_inference_data = test_score_inference_data.swapaxes(1, 2)
 
         # Initialize model
         print(f"Initializing {model} model...")
@@ -442,36 +456,38 @@ class BasePreprocessing:
         if model_instance is None:
             return
 
-        # Inference jet scores for both
+        # Inference jet scores for every split
         print(f"Running inference on ratio train data...")
         train_jet_scores = self._inference_jet_scores(model_instance, train_ratio_inference_data)
-        
+
         print(f"Running inference on score train data...")
         train_score_jet_scores = self._inference_jet_scores(model_instance, train_score_inference_data)
 
-        print(f"Running inference on test data...")
+        print(f"Running inference on SM test data...")
         test_jet_scores = self._inference_jet_scores(model_instance, test_inference_data)
 
-        # TODO: Decide how to save and how to use in the models
+        print(f"Running inference on ratio test data...")
+        test_ratio_jet_scores = self._inference_jet_scores(model_instance, test_ratio_inference_data)
+
+        print(f"Running inference on score test data...")
+        test_score_jet_scores = self._inference_jet_scores(model_instance, test_score_inference_data)
+
         # Concatenate jet scores to features
         train_ratio_tf_data = np.concatenate([train_ratio_features, train_jet_scores[:, :4]], axis=-1)
         train_score_tf_data = np.concatenate([train_score_features, train_score_jet_scores[:, :4]], axis=-1)
         test_tf_data = np.concatenate([test_features, test_jet_scores[:, :4]], axis=-1)
+        test_ratio_tf_data = np.concatenate([test_ratio_features, test_ratio_jet_scores[:, :4]], axis=-1)
+        test_score_tf_data = np.concatenate([test_score_features, test_score_jet_scores[:, :4]], axis=-1)
 
-        # Save transformed data
-        train_r_high_lvl = source / "x_train_ratio_hlvl.npy"
-        train_s_high_lvl = source / "x_train_score_hlvl.npy"
-
-        train_r_jet_lvl = source / "x_train_ratio_llvl.npy"
-        train_s_jet_lvl = source / "x_train_score_llvl.npy"
-
-        test_jet_lvl = source / "x_test_llvl.npy"
-        test_high_lvl = source / "x_test_hlvl.npy"
-
+        # Save transformed data (one hlvl/llvl file per raw test sample)
         print(f"Saving transformed data to {source}")
-        np.save(train_r_high_lvl, train_ratio_tf_data)
-        np.save(train_s_high_lvl, train_score_tf_data)
-        np.save(train_r_jet_lvl, train_jet_scores)
-        np.save(train_s_jet_lvl, train_score_jet_scores)
-        np.save(test_jet_lvl, test_jet_scores)
-        np.save(test_high_lvl, test_tf_data)
+        np.save(source / "x_train_ratio_hlvl.npy", train_ratio_tf_data)
+        np.save(source / "x_train_score_hlvl.npy", train_score_tf_data)
+        np.save(source / "x_train_ratio_llvl.npy", train_jet_scores)
+        np.save(source / "x_train_score_llvl.npy", train_score_jet_scores)
+        np.save(source / "x_test_llvl.npy", test_jet_scores)
+        np.save(source / "x_test_hlvl.npy", test_tf_data)
+        np.save(source / "x_test_ratio_llvl.npy", test_ratio_jet_scores)
+        np.save(source / "x_test_ratio_hlvl.npy", test_ratio_tf_data)
+        np.save(source / "x_test_score_llvl.npy", test_score_jet_scores)
+        np.save(source / "x_test_score_hlvl.npy", test_score_tf_data)

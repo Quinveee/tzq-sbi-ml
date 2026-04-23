@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import sys
 from shlex import join as shell_join
 from collections.abc import Mapping
 from pathlib import Path
@@ -58,7 +59,12 @@ def _serialize_export(
             raise TypeError("launcher.env must be a key-value mapping")
         env_map = resolved
 
-    serialized = ",".join(f"{key}={value}" for key, value in env_map.items())
+    # Ensure worker scripts can resolve the same Python environment libraries on
+    # compute nodes (libstdc++, CUDA libs, etc.).
+    export_map: dict[str, object] = {str(key): value for key, value in env_map.items()}
+    export_map.setdefault("ENV", str(Path(sys.executable).resolve().parent))
+
+    serialized = ",".join(f"{key}={value}" for key, value in export_map.items())
 
     if export_all_env:
         return f"ALL,{serialized}" if serialized else "ALL"

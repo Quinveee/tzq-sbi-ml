@@ -53,8 +53,11 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         score_train = np.load(source / "t_xz_train_ratio.npy")[:max_samples]
         labels_train = np.load(source / "y_train_ratio.npy")[:max_samples]
 
-        x_test = np.load(source / "x_test.npy")
-        theta_test = np.load(source / "theta_test.npy")
+        # Ratio targets (r_xz, t_xz, y) are aligned with x_test_ratio.npy and
+        # the per-event θ₀ in theta0_test_ratio.npy — not with theta_test.npy
+        # (all-zero SM sample used for Asimov).
+        x_test = np.load(source / "x_test_ratio.npy")
+        theta_test = np.load(source / "theta0_test_ratio.npy")
 
         ratio_test = np.load(source / "r_xz_test_ratio.npy")
         score_test = np.load(source / "t_xz_test_ratio.npy")
@@ -63,7 +66,9 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         preprocessed_train = preprocessed_test = None
         if self._use_preprocessed:
             preprocessed_train = np.load(source / "x_train_ratio_hlvl.npy")[:max_samples]
-            preprocessed_test = np.load(source / "x_test_hlvl.npy")
+            # Must be aligned with x_test_ratio.npy — x_test_hlvl.npy is built
+            # from the separate SM Asimov sample (x_test.npy).
+            preprocessed_test = np.load(source / "x_test_ratio_hlvl.npy")
             if preprocessed_train.shape[-1] != self._preprocessed_dim:
                 raise ValueError(
                     "x_train_ratio_hlvl.npy has "
@@ -71,7 +76,7 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
                 )
             if preprocessed_test.shape[-1] != self._preprocessed_dim:
                 raise ValueError(
-                    "x_test_hlvl.npy has "
+                    "x_test_ratio_hlvl.npy has "
                     f"{preprocessed_test.shape[-1]} features, expected {self._preprocessed_dim}"
                 )
 

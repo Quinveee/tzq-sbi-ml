@@ -48,7 +48,7 @@ class ExperimentLocalParticles(BaseExperimentLocal):
         max_samples = self.cfg.train.get("clamp_samples", None)
 
         x_train = np.load(source / "x_train_score.npy")[:max_samples]
-        x_test = np.load(source / "x_test.npy")
+        x_test = np.load(source / "x_test_score.npy")
 
         score_train = np.load(source / "t_xz_train_score.npy")[:max_samples]
         score_test = np.load(source / "t_xz_test_score.npy")
@@ -56,7 +56,9 @@ class ExperimentLocalParticles(BaseExperimentLocal):
         preprocessed_train = preprocessed_test = None
         if self._use_preprocessed:
             preprocessed_train = np.load(source / "x_train_score_hlvl.npy")[:max_samples]
-            preprocessed_test = np.load(source / "x_test_hlvl.npy")
+            # Must be aligned with x_test_score.npy — x_test_hlvl.npy is built
+            # from the separate SM Asimov sample (x_test.npy).
+            preprocessed_test = np.load(source / "x_test_score_hlvl.npy")
             if preprocessed_train.shape[-1] != self._preprocessed_dim:
                 raise ValueError(
                     "x_train_score_hlvl.npy has "
@@ -64,7 +66,7 @@ class ExperimentLocalParticles(BaseExperimentLocal):
                 )
             if preprocessed_test.shape[-1] != self._preprocessed_dim:
                 raise ValueError(
-                    "x_test_hlvl.npy has "
+                    "x_test_score_hlvl.npy has "
                     f"{preprocessed_test.shape[-1]} features, expected {self._preprocessed_dim}"
                 )
 

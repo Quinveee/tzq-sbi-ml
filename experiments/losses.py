@@ -46,13 +46,16 @@ class ALICES(Loss):
     @classmethod
     def forward(cls, output: ModelOutput, **kwds):
         alpha = kwds.get("lambda_score", 1.0)
-        s = torch.sigmoid(-torch.log(output.target.ratio))
+        # σ(-log r) = 1 / (1 + r); avoids log(0) if r_true underflows.
+        s = 1.0 / (1.0 + output.target.ratio)
         bce = F.binary_cross_entropy_with_logits(-output.pred.log_ratio, s)
         if alpha > 0:
-            mse = F.mse_loss(
-                (1.0 - output.target.label) * output.pred.score,
-                (1.0 - output.target.label) * output.target.score,
-            )
+            # Score target t_xz is the gradient of log p evaluated at θ₀, so
+            # it is only a meaningful regression target on numerator samples
+            # (y=0). Match RASCAL's masking to stay consistent.
+            mask = (1.0 - output.target.label).reshape(-1, 1)
+            num = mask.sum().clamp_min(1.0)
+            mse = ((mask * (output.pred.score - output.target.score) ** 2).sum()) / num
             return bce + alpha * mse
         return bce
 
@@ -62,11 +65,11 @@ class ALICE(Loss):
 
     @classmethod
     def forward(cls, output, **kwds):
-        return ALICES.forward(output=output, alpha=0.0)
+        return ALICES.forward(output=output, lambda_score=0.0)
 
 
 class SALLY(Loss):
-    REQUIRES_SCORE = False
+    REQUIRES_SCORE = True
 
     @classmethod
     def forward(cls, output, **kwds):
@@ -93,13 +96,18 @@ class ROLR(Loss):
             output.target.ratio, np.exp(-log_r_clip), np.exp(log_r_clip)
         )
         log_ratio_pred = torch.clamp(output.pred.log_ratio, -log_r_clip, log_r_clip)
-        loss_inv = F.mse_loss(
-            (1.0 - output.target.label) * torch.exp(-log_ratio_pred),
-            (1.0 - output.target.label) * (1.0 / ratio),
-        )
-        loss = F.mse_loss(
-            output.target.label * torch.exp(log_ratio_pred), output.target.label * ratio
-        )
+
+        # We use masks to ensure one term does not dominate the loss when the dataset is unbalanced
+        mask_ref = output.target.label.reshape(-1, 1)
+        mask_theta = (1.0 - output.target.label).reshape(-1, 1)
+
+        r_pred = torch.exp(log_ratio_pred)
+        r_true = ratio
+
+        loss = ((mask_ref * (r_pred - r_true) ** 2).sum() / mask_ref.sum().clamp_min(1.0))
+        loss_inv = ((mask_theta * (1.0 / r_pred - 1.0 / r_true) ** 2).sum()
+                    / mask_theta.sum().clamp_min(1.0))
+
         return loss + loss_inv
 
 
@@ -125,20 +133,19 @@ class NLL(Loss):
         return -log_p.mean()
 
 
-# Alices but with Rolr-style score regularization, to be used with log-likelihood ratio regressors
-class JointLoss(Loss):
+class RASCAL(Loss):
     REQUIRES_SCORE = True
 
     @classmethod
     def forward(cls, output, **kwds):
         lambda_score = kwds.get("lambda_score", 1.0)
-        log_r_clip = kwds.get("log_r_clip", 10.0)
 
-        l_ratio = ROLR.forward(output, log_r_clip=log_r_clip)
-
-        l_score = F.mse_loss(
-            (1.0 - output.target.label) * output.pred.score,
-            (1.0 - output.target.label) * output.target.score,
+        l_ratio = F.binary_cross_entropy_with_logits(
+            -output.pred.log_ratio, output.target.label
         )
+
+        mask = (1.0 - output.target.label).reshape(-1, 1)
+        num = mask.sum().clamp_min(1.0)
+        l_score = ((mask * (output.pred.score - output.target.score) ** 2).sum()) / num
 
         return l_ratio + lambda_score * l_score

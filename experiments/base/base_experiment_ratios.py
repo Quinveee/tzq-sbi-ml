@@ -58,8 +58,12 @@ class BaseExperimentRatios(BaseExperimentML):
         labels_train = np.load(source / "y_train_ratio.npy")[:max_samples]
 
         # Load test data
-        x_test = np.load(source / "x_test.npy")
-        theta_test = np.load(source / "theta_test.npy")
+        # NOTE: ratio targets (r_xz, t_xz, y) were generated for events in
+        # x_test_ratio.npy at the per-event sampled θ₀ in theta0_test_ratio.npy.
+        # theta_test.npy is a separate (all-zero) SM sample used for Asimov, and
+        # is NOT aligned with the ratio labels.
+        x_test = np.load(source / "x_test_ratio.npy")
+        theta_test = np.load(source / "theta0_test_ratio.npy")
 
         # Load test labels 
         ratio_test = np.load(source / "r_xz_test_ratio.npy")

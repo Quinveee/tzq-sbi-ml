@@ -52,7 +52,7 @@ class BaseExperimentLocal(BaseExperimentML):
 
         # Load raw data
         x_train = np.load(source / "x_train_score.npy")[:max_samples]
-        x_test = np.load(source / "x_test.npy")
+        x_test = np.load(source / "x_test_score.npy")
 
         # Load train/test labels
         score_train = np.load(source / "t_xz_train_score.npy")[:max_samples]
