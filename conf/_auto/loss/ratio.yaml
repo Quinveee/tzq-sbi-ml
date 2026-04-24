@@ -1,2 +1,2 @@
-_target_: experiments.losses.ROLR
+_target_: experiments.losses.CARL
 log_r_clip: 10.0

@@ -34,6 +34,16 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         lloca_frame_layers = int(lloca_config.get("LLoCa_frame_layers", 2))
         lloca_eps = float(lloca_config.get("LLoCa_eps", 1e-8))
         lloca_use_float64 = bool(lloca_config.get("LLoCa_use_float64", True))
+        # Bound the Lorentz factor of the predicted boost. Without this the
+        # frame predictor can output arbitrarily-boosted frames for near-
+        # lightlike events, causing large loss spikes. Recommended in the
+        # LLoCa paper as a regularizer for stable training.
+        _gamma_max_raw = lloca_config.get("LLoCa_gamma_max", None)
+        lloca_gamma_max = float(_gamma_max_raw) if _gamma_max_raw is not None else None
+        _gamma_hardness_raw = lloca_config.get("LLoCa_gamma_hardness", None)
+        lloca_gamma_hardness = (
+            float(_gamma_hardness_raw) if _gamma_hardness_raw is not None else None
+        )
 
         kwds["key"] = "transformer_lloca" if lloca else "Transformer"
         super().__init__(*args, **kwds)
@@ -46,6 +56,8 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         self.lloca_frame_layers = lloca_frame_layers
         self.lloca_eps = lloca_eps
         self.lloca_use_float64 = lloca_use_float64
+        self.lloca_gamma_max = lloca_gamma_max
+        self.lloca_gamma_hardness = lloca_gamma_hardness
 
         if self.lloca:
             n_scalars = int(self.lloca_num_scalars or 0)
@@ -77,6 +89,8 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
                 num_layers=self.lloca_frame_layers,
                 eps=self.lloca_eps,
                 use_float64=self.lloca_use_float64,
+                gamma_max=self.lloca_gamma_max,
+                gamma_hardness=self.lloca_gamma_hardness,
             )
 
     @abstractmethod

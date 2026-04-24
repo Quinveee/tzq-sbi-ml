@@ -11,9 +11,14 @@ LLoCa:
   LLoCa_num_scalars: 3
   LLoCa_num_vectors: 2
   LLoCa_frame_hidden: 128
-  LLoCa_frame_layers: 5
+  LLoCa_frame_layers: 2
   LLoCa_eps: 1e-8
   LLoCa_use_float64: true
+  # Clamp γ of predicted boosts. Without this the frame predictor can emit
+  # arbitrarily-boosted frames for near-lightlike events and the loss spikes.
+  # Soft clamp (hardness=4) keeps gradients smooth at the cap.
+  LLoCa_gamma_max: 10.0
+  LLoCa_gamma_hardness: 4.0
 
 net:
   _target_: models.transformer.Transformer
