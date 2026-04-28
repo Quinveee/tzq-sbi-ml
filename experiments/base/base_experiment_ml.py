@@ -169,14 +169,6 @@ class BaseExperimentML(BaseExperiment):
         assert self.normalizer is not None
         raw.x_train = self.normalizer.fit_transform(raw.x_train)
         raw.x_test = self.normalizer.transform(raw.x_test)
-        n_mask = getattr(self.normalizer, "n_mask_cols", 0)
-        if n_mask:
-            LOGGER.info(
-                "Normalizer appended %d NaN-presence mask columns; "
-                "post-normalization x dim = %d",
-                n_mask,
-                raw.x_train.shape[-1],
-            )
 
         # Create datasets
         dataset = self._load_dataset(raw, "train")
@@ -238,6 +230,38 @@ class BaseExperimentML(BaseExperiment):
             num_workers=0,
         )
 
+    # def _patch_data_dependent_shapes(self) -> None:
+    #     """Resolve ``cfg.model.net.n_observables`` from the actual data width.
+
+    #     The 1D and 3D feature datasets have different column counts (35 vs 33),
+    #     so the MLP first-layer input size has to be derived from the file
+    #     instead of being hardcoded. Models without this field are left alone.
+    #     """
+    #     if OmegaConf.select(self.cfg, "model.net.n_observables") is None:
+    #         return
+
+    #     src = Path(self.cfg.dataset.path)
+    #     for fname in ("x_train_ratio.npy", "x_train_score.npy"):
+    #         candidate = src / fname
+    #         if candidate.exists():
+    #             data_path = candidate
+    #             break
+    #     else:
+    #         LOGGER.warning(
+    #             "Could not find raw data under %s to derive n_observables; "
+    #             "leaving configured value", src,
+    #         )
+    #         return
+
+    #     n_obs = int(np.load(data_path, mmap_mode="r").shape[-1])
+    #     current = OmegaConf.select(self.cfg, "model.net.n_observables")
+    #     if current != n_obs:
+    #         LOGGER.info(
+    #             "Setting model.net.n_observables=%d (was %s) from %s",
+    #             n_obs, current, data_path.name,
+    #         )
+    #         OmegaConf.update(self.cfg, "model.net.n_observables", n_obs)
+
     def init_model(self) -> None:
         """
         Initialize model from configuration object
@@ -245,6 +269,11 @@ class BaseExperimentML(BaseExperiment):
         Move model to appropriate device
 
         """
+        # TODO: see if important
+        # # Patch any data-dependent shape fields (e.g. MLP n_observables, which
+        # # depends on raw cols + NaN-presence mask cols added by the Normalizer).
+        # self._patch_data_dependent_shapes()
+
         # Initialize model
         self.model = instantiate(self.cfg.model)
 
@@ -282,6 +311,23 @@ class BaseExperimentML(BaseExperiment):
 
         """
         return self.loss_fn(self._preds(batch))
+
+    # --- Validation extra-metric hooks (override in subclasses) ---
+    # The default no-op implementations preserve current behavior; ratio
+    # experiments override these to compute a calibration error each epoch
+    # so checkpoint selection can blend it with the (smoothed) val loss.
+
+    def _val_extra_init(self) -> None:
+        """Reset per-epoch accumulators for extra validation metrics."""
+        return None
+
+    def _val_extra_accumulate(self, output) -> None:
+        """Accumulate per-batch info from a `_preds` output."""
+        return None
+
+    def _val_extra_finalize(self) -> Dict[str, float]:
+        """Return a dict of extra validation metrics (e.g. calibration_error)."""
+        return {}
 
     def train(self) -> Tuple[Dict, Losses]:
         """
@@ -379,9 +425,15 @@ class BaseExperimentML(BaseExperiment):
 
         # Training loop
         global_step = 0
+        best_score = float("inf")
         best_val_loss = float("inf")
         best_state_dict = None
         best_epoch = -1
+
+        # Selection knobs. Defaults (window=1, weight=0) reproduce the previous
+        # "select on raw val loss" behavior.
+        smoothing_window = max(1, int(self.cfg.train.get("val_smoothing", 1) or 1))
+        cal_weight = float(self.cfg.train.get("val_calibration_weight", 0.0) or 0.0)
 
         for e in range(self.cfg.train.epochs):
             self.model.train()
@@ -459,6 +511,7 @@ class BaseExperimentML(BaseExperiment):
             # Validation
             self.model.eval()
             val_loss = 0.0
+            self._val_extra_init()
 
             # If the loss function requires computing the score as the gradient
             # of the output w.r.t the input parameters, we need also a graph for
@@ -466,30 +519,55 @@ class BaseExperimentML(BaseExperiment):
             with needs_grad(self.loss_fn.REQUIRES_SCORE):
                 for batch in self.val_loader:
                     batch.to_(**self.device_kwds)
-                    val_loss += self.loss(batch).item()
+                    output = self._preds(batch)
+                    val_loss += self.loss_fn(output).item()
+                    self._val_extra_accumulate(output)
 
             avg_val_loss = val_loss / len(self.val_loader)
-            print(f"Epoch {e+1}/{self.cfg.train.epochs} - val loss: {avg_val_loss:.4f}")
-            writer.add_scalar("Loss/val_epoch", avg_val_loss, e + 1)
+            val_losses.append(avg_val_loss)
+            extra = self._val_extra_finalize()
+            cal_err = extra.get("calibration_error")
 
-            if avg_val_loss < best_val_loss:
+            # Smoothed val loss reduces ratio-regression noise in selection.
+            smoothed_val = float(np.mean(val_losses[-smoothing_window:]))
+            # Blended selection score: lower is better. With cal_weight=0 (or
+            # no calibration available) this is just the smoothed val loss.
+            score = smoothed_val
+            if cal_err is not None and cal_weight > 0.0:
+                score = score + cal_weight * cal_err
+
+            cal_msg = f"  cal_err: {cal_err:.4f}" if cal_err is not None else ""
+            print(
+                f"Epoch {e+1}/{self.cfg.train.epochs} - val loss: {avg_val_loss:.4f}"
+                f"  smoothed: {smoothed_val:.4f}  score: {score:.4f}{cal_msg}"
+            )
+            writer.add_scalar("Loss/val_epoch", avg_val_loss, e + 1)
+            writer.add_scalar("Loss/val_smoothed", smoothed_val, e + 1)
+            writer.add_scalar("Loss/val_score", score, e + 1)
+            if cal_err is not None:
+                writer.add_scalar("Loss/val_calibration_error", cal_err, e + 1)
+
+            if score < best_score:
+                best_score = score
                 best_val_loss = avg_val_loss
                 best_epoch = e + 1
                 best_state_dict = copy.deepcopy(self.model.state_dict())
                 LOGGER.info(
-                    f"New best val loss {best_val_loss:.4f} at epoch {best_epoch}"
+                    f"New best score {best_score:.4f} (val loss {best_val_loss:.4f}) "
+                    f"at epoch {best_epoch}"
                 )
 
             if use_wandb:
-                wandb.log(
-                    {
-                        "loss/val_epoch": avg_val_loss,
-                        "loss/val_best": best_val_loss,
-                        "loss/val_best_epoch": best_epoch,
-                    },
-                    step=global_step,
-                )
-            val_losses.append(avg_val_loss)
+                payload = {
+                    "loss/val_epoch": avg_val_loss,
+                    "loss/val_smoothed": smoothed_val,
+                    "loss/val_score": score,
+                    "loss/val_best": best_score,
+                    "loss/val_best_epoch": best_epoch,
+                }
+                if cal_err is not None:
+                    payload["loss/val_calibration_error"] = cal_err
+                wandb.log(payload, step=global_step)
 
         writer.close()
         if use_wandb and created_wandb_run:
@@ -498,7 +576,8 @@ class BaseExperimentML(BaseExperiment):
         final_state_dict = best_state_dict if best_state_dict is not None else self.model.state_dict()
         if best_state_dict is not None:
             LOGGER.info(
-                f"Returning best checkpoint from epoch {best_epoch} (val loss {best_val_loss:.4f})"
+                f"Returning best checkpoint from epoch {best_epoch} "
+                f"(score {best_score:.4f}, val loss {best_val_loss:.4f})"
             )
             self.model.load_state_dict(best_state_dict)
         return final_state_dict, Losses(train=train_losses, val=val_losses)

@@ -7,6 +7,7 @@ from typing import Mapping
 import torch.nn as nn
 
 from .configs import MLPConfig, SAConfig
+from .modules.structured import StructuredLinearIn
 from .modules.te import TE
 
 
@@ -45,20 +46,24 @@ class Transformer(nn.Module):
     dropout_p: float,
     lloca_num_scalars: int = 0,
     lloca_num_vectors: int = 0,
+    n_input_vectors: int = 0,
     ) -> None:
         super().__init__()
         emb_hidden = derive_emb_hidden(dim_in, emb_factor, attention.num_heads)
 
+        # Sanity-check the per-head layout regardless of LLoCa active. The
+        # structured input projection enforces this layout for parametrized
+        # transformers, and LLoCa attention also relies on it.
         if lloca_num_vectors:
             emb_head = emb_hidden // attention.num_heads
             min_head = lloca_num_scalars + lloca_num_vectors * 4
             if emb_head < min_head:
                 raise ValueError(
-                    "Invalid LLoCa attention setup: "
+                    "Invalid attention head layout: "
                     f"emb_head={emb_head}, required={min_head} "
                     f"(n_scalars={lloca_num_scalars}, n_vectors={lloca_num_vectors}). "
                     "Increase emb_factor / embedding size, reduce num_heads, "
-                    "or reduce LLoCa scalar/vector channels."
+                    "or reduce scalar/vector channels."
                 )
 
         # configs
@@ -72,8 +77,24 @@ class Transformer(nn.Module):
             dropout_p=dropout_p,
         )
 
-        # layers
-        self.linear_in = nn.Linear(dim_in, emb_hidden)
+        # Structured input: scalars and 4-vectors enter through disjoint
+        # branches so theta-derived activations cannot leak into vector
+        # channels. With n_input_vectors=0 (features wrappers) the layer
+        # collapses to a plain scalar projection — equivalent to nn.Linear.
+        n_input_vectors = int(n_input_vectors or 0)
+        if 4 * n_input_vectors > dim_in:
+            raise ValueError(
+                f"4 * n_input_vectors={4 * n_input_vectors} exceeds dim_in={dim_in}"
+            )
+        n_scalar_in = dim_in - 4 * n_input_vectors
+        self.linear_in = StructuredLinearIn(
+            n_scalar_in=n_scalar_in,
+            n_vec_in=n_input_vectors,
+            emb_hidden=emb_hidden,
+            num_heads=attention.num_heads,
+            n_head_scalars=lloca_num_scalars,
+            n_head_vectors=lloca_num_vectors,
+        )
         self.te_blocks = nn.ModuleList(
             [
                 TE(
@@ -94,9 +115,12 @@ class Transformer(nn.Module):
         # (attention `unify_heads` and the MLP's last linear) by
         # 1/sqrt(2*num_blocks). This keeps the variance of the residual
         # stream from blowing up with depth in pre-LN transformers.
-        nn.init.xavier_uniform_(self.linear_in.weight)
-        if self.linear_in.bias is not None:
-            nn.init.zeros_(self.linear_in.bias)
+        # `linear_in` is structured (StructuredLinearIn) and self-initializes;
+        # we only re-Xavier its scalar branch to match the previous defaults.
+        if getattr(self.linear_in, "scalar_proj", None) is not None:
+            nn.init.xavier_uniform_(self.linear_in.scalar_proj.weight)
+            if self.linear_in.scalar_proj.bias is not None:
+                nn.init.zeros_(self.linear_in.scalar_proj.bias)
         nn.init.xavier_uniform_(self.linear_out.weight)
         if self.linear_out.bias is not None:
             nn.init.zeros_(self.linear_out.bias)

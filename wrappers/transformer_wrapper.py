@@ -178,14 +178,22 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         """
         backends = get_backends(force_math)
 
-        # Transfomer already implements a version akin to tokens, so we use 'channels' as default mode 
-        index = ptr2index(ptr, mode="channels", theta_dim=embedding_kwargs.get("theta_dim", 0))
+        mode = embedding_kwargs.get("mode", "channels")
+        theta_dim = int(embedding_kwargs.get("theta_dim", 0) or 0)
+
+        if mode == "tokens" and self.lloca:
+            raise ValueError(
+                "LLoCa requires particle-level tokens and is incompatible with "
+                "mode='tokens'. Use mode='channels' when LLoCa is active."
+            )
+
+        index = ptr2index(ptr, mode=mode, theta_dim=theta_dim if mode == "tokens" else 0)
         attention_mask = att_mask(index)
 
         # Delegate embedding to subclasses
         tokens = self.embed(particles, **embedding_kwargs)
 
-        # Build attn_kwargs 
+        # Build attn_kwargs
         attn_kwargs = {}
         if self.lloca is not None:
             attn_kwargs["lloca"] = self.lloca
@@ -287,27 +295,37 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         ptr: torch.Tensor,
         preprocessed: torch.Tensor | None = None,
         met: torch.Tensor | None = None,
+        mode: str = "channels",
         **kwds,
     ) -> torch.Tensor:
         """
-        Concatenate particles fourmomenta with theory parameters and optional
-        preprocessed event-level features / MET. Event-level conditioning vectors
-        are repeated for each particle in the corresponding event.
+        Build input tokens for the transformer.
 
-        :param particles: Particles fourmomenta with size: (num particles, 4)
-        :type particles: torch.Tensor
-        :param theta: Theory parameters vector with size: (batch size, theta dim)
-        :type theta: torch.Tensor
-        :param ptr: Event pointer with size: (batch size + 1,)
-        :type ptr: torch.Tensor
-        :param preprocessed: Event-level preprocessed features
-        :type preprocessed: torch.Tensor | None
-        :param met: Event-level MET features (pt, phi)
-        :type met: torch.Tensor | None
-        :return: Concatenated tensors with size: (num particles, 4 + theta dim + extras)
-        :rtype: Tensor
+        ``mode="channels"`` concatenates θ (and optional preprocessed / MET
+        features) onto every particle token — θ is a constant additive signal
+        shared across all tokens of an event.
 
+        ``mode="tokens"`` prepends ``theta_dim`` dedicated θ tokens per event,
+        mirroring the LGATr tokens convention. Each θ token places θ[i] in
+        the i-th of the first ``theta_dim`` input slots; remaining slots are
+        zero. Particle tokens zero-out the first ``theta_dim`` slots and
+        carry [particle, preprocessed, met] in the trailing slots. Total
+        input width matches ``mode="channels"``.
         """
+        if mode == "channels":
+            return self._embed_channels(particles, theta, ptr, preprocessed, met)
+        if mode == "tokens":
+            return self._embed_tokens(particles, theta, ptr, preprocessed, met)
+        raise ValueError(f"Invalid transformer embed mode '{mode}'")
+
+    def _embed_channels(
+        self,
+        particles: torch.Tensor,
+        theta: torch.Tensor,
+        ptr: torch.Tensor,
+        preprocessed: torch.Tensor | None,
+        met: torch.Tensor | None,
+    ) -> torch.Tensor:
         n, e = particles.shape
         theta_dim = theta.shape[-1]
 
@@ -335,6 +353,71 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         assert tokens.size() == (n, e + conditioning_dim)
 
         return tokens
+
+    def _embed_tokens(
+        self,
+        particles: torch.Tensor,
+        theta: torch.Tensor,
+        ptr: torch.Tensor,
+        preprocessed: torch.Tensor | None,
+        met: torch.Tensor | None,
+    ) -> torch.Tensor:
+        ptr = ptr.to(dtype=torch.long)
+        n_particles, p_dim = particles.shape
+        n_events = int(ptr.shape[0] - 1)
+        theta_dim = int(theta.shape[-1])
+        counts = ptr[1:] - ptr[:-1]
+        device = particles.device
+        dtype = particles.dtype
+
+        pre_dim = (
+            preprocessed.shape[-1]
+            if preprocessed is not None and preprocessed.shape[-1] > 0
+            else 0
+        )
+        met_dim = met.shape[-1] if met is not None and met.shape[-1] > 0 else 0
+
+        trailing_dim = p_dim + pre_dim + met_dim
+        dim_in = theta_dim + trailing_dim
+
+        tokens_per_event = counts + theta_dim
+        tokens_ptr = torch.zeros(n_events + 1, dtype=torch.long, device=device)
+        tokens_ptr[1:] = tokens_per_event.cumsum(dim=0)
+        n_total = int(tokens_ptr[-1])
+
+        out = particles.new_zeros(n_total, dim_in)
+
+        # θ tokens: one per theta component per event. θ[e, i] sits in column i
+        # of the i-th θ token; particle/extra slots stay zero.
+        theta_offsets = tokens_ptr[:-1]
+        dim_idx = torch.arange(theta_dim, device=device)
+        theta_rows = theta_offsets.unsqueeze(1) + dim_idx.unsqueeze(0)
+        theta_cols = dim_idx.unsqueeze(0).expand(n_events, -1)
+        out[theta_rows, theta_cols] = theta.to(dtype)
+
+        # Particle tokens: placed after this event's θ tokens. First theta_dim
+        # columns stay zero; particle 4-vector + optional preprocessed / MET
+        # occupy the trailing columns.
+        particle_offsets = tokens_ptr[:-1] + theta_dim
+        event_of_particle = torch.arange(n_events, device=device).repeat_interleave(counts)
+        within_event = (
+            torch.arange(n_particles, device=device)
+            - ptr[:-1].repeat_interleave(counts)
+        )
+        particle_rows = particle_offsets[event_of_particle] + within_event
+
+        cursor = theta_dim
+        out[particle_rows, cursor : cursor + p_dim] = particles
+        cursor += p_dim
+        if pre_dim > 0:
+            pre_repeated = self._repeat_event_features(preprocessed, ptr)
+            out[particle_rows, cursor : cursor + pre_dim] = pre_repeated
+            cursor += pre_dim
+        if met_dim > 0:
+            met_repeated = self._repeat_event_features(met, ptr)
+            out[particle_rows, cursor : cursor + met_dim] = met_repeated
+
+        return out
 
 
 class LocalTransformerFeaturesWrapper(LocalTransformerWrapper):

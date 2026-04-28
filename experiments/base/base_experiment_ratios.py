@@ -29,8 +29,49 @@ class BaseExperimentRatios(BaseExperimentML):
     def __init__(self, *args, **kwds) -> None:
         kwds["key"] = "ratios"
         super().__init__(*args, **kwds)
+        self._val_log_r: list[torch.Tensor] = []
+        self._val_y: list[torch.Tensor] = []
 
     def _preds(self, *args, **kwargs) -> ...: ...
+
+    def _val_extra_init(self) -> None:
+        self._val_log_r = []
+        self._val_y = []
+
+    def _val_extra_accumulate(self, output: ModelOutput) -> None:
+        log_r = getattr(output.pred, "log_ratio", None)
+        label = getattr(output.target, "label", None)
+        if log_r is None or label is None:
+            return
+        self._val_log_r.append(log_r.detach().reshape(-1).cpu())
+        self._val_y.append(label.detach().reshape(-1).cpu())
+
+    def _val_extra_finalize(self) -> dict:
+        """Expected Calibration Error of p(y=1|x)=sigmoid(log r̂)."""
+        if not self._val_log_r:
+            return {}
+        log_r = torch.cat(self._val_log_r).float()
+        y = torch.cat(self._val_y).float()
+        if y.numel() == 0:
+            return {}
+        # Skip when labels carry no signal (e.g. an all-zero placeholder).
+        if (y.unique().numel() < 2):
+            return {}
+
+        p = torch.sigmoid(log_r).clamp(0.0, 1.0)
+        n_bins = 15
+        edges = torch.linspace(0.0, 1.0, n_bins + 1)
+        n_total = p.numel()
+        ece = 0.0
+        for i in range(n_bins):
+            lo = edges[i].item()
+            hi = edges[i + 1].item()
+            mask = (p >= lo) & (p <= hi if i == n_bins - 1 else p < hi)
+            n_b = int(mask.sum().item())
+            if n_b == 0:
+                continue
+            ece += (n_b / n_total) * abs(p[mask].mean().item() - y[mask].mean().item())
+        return {"calibration_error": float(ece)}
 
     def _load_raw_data(self, source: str) -> ParametrizedRawData:
         """

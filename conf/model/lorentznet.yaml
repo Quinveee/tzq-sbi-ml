@@ -12,17 +12,3 @@ net:
   n_layers: 13
   c_weight: 5e-3
   dropout: ${train.dropout}
-
-train:
-  lr: 2e-4
-  epochs: 70
-  dropout: 0.1
-  lr_warmup: 10
-  lr_min: 2e-5
-  lr_restart_period: 20
-  lr_restart_mult: 2
-  weight_decay: 1e-5
-  batch_size: 128
-  clip_grad_norm: 1
-  validation_split: 0.2
-  clamp_samples: null

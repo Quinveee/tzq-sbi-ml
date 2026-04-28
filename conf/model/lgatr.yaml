@@ -19,19 +19,5 @@ net:
     num_heads: 8
   mlp: {}
 
-train:
-  lr: 2e-4 # used in original LGATr paper
-  epochs: 70
-  dropout: 0.1
-  lr_warmup: 10
-  lr_min: 2e-5
-  lr_restart_period: 20
-  lr_restart_mult: 2
-  weight_decay: 1e-5
-  batch_size: 128
-  clip_grad_norm: 1
-  validation_split: 0.2
-  clamp_samples: null
-
 # Delay initialization of the `net` object
 _recursive_: false

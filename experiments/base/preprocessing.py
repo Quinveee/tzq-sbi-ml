@@ -279,8 +279,20 @@ class BasePreprocessing:
     def _inference_jet_scores(self, model, data: np.ndarray) -> np.ndarray:
         """
         convert the data into batches and pass through the model to get jet scores
-        for each event, we take the scores p(q/g), p(W->qq), p(Z->qq) and p(top)
+        for each event, we take the scores p(top->bqq), p(top->bl), p(QCD), p(W->qq)
         and add them as features to the data.
+
+        For ParT/MIPaRT trained on 10 classes, the scores are in the following order:
+        probs[:, 0]  # P(QCD)
+        probs[:, 1]  # P(H -> bb)
+        probs[:, 2]  # P(H -> cc)
+        probs[:, 3]  # P(H -> gg)
+        probs[:, 4]  # P(H -> 4q)
+        probs[:, 5]  # P(H -> qq l)
+        probs[:, 6]  # P(Z -> qq)
+        probs[:, 7]  # P(W -> qq)
+        probs[:, 8]  # P(top -> bqq)
+        probs[:, 9]  # P(top -> bl)
 
         :param model: the model to use for inference
         :param data: the data to pass through the model, shape (nsamples, max_particles, n_features)
@@ -298,8 +310,10 @@ class BasePreprocessing:
                 output = model(batch_tensor)
                 jet_scores.append(output.cpu().numpy())
 
-        return np.concatenate(jet_scores, axis=0)
-
+        out = np.concatenate(jet_scores, axis=0)
+        # we take the scores p(top->bqq), p(top->bl), p(QCD), p(W->qq)
+        cut = out[:, [8, 9, 0, 7]]  # shape (nsamples, 4)
+        return cut
 
 
     def _initialize_model(self, model_name: str):
@@ -473,11 +487,11 @@ class BasePreprocessing:
         test_score_jet_scores = self._inference_jet_scores(model_instance, test_score_inference_data)
 
         # Concatenate jet scores to features
-        train_ratio_tf_data = np.concatenate([train_ratio_features, train_jet_scores[:, :4]], axis=-1)
-        train_score_tf_data = np.concatenate([train_score_features, train_score_jet_scores[:, :4]], axis=-1)
-        test_tf_data = np.concatenate([test_features, test_jet_scores[:, :4]], axis=-1)
-        test_ratio_tf_data = np.concatenate([test_ratio_features, test_ratio_jet_scores[:, :4]], axis=-1)
-        test_score_tf_data = np.concatenate([test_score_features, test_score_jet_scores[:, :4]], axis=-1)
+        train_ratio_tf_data = np.concatenate([train_ratio_features, train_jet_scores], axis=-1)
+        train_score_tf_data = np.concatenate([train_score_features, train_score_jet_scores], axis=-1)
+        test_tf_data = np.concatenate([test_features, test_jet_scores], axis=-1)
+        test_ratio_tf_data = np.concatenate([test_ratio_features, test_ratio_jet_scores], axis=-1)
+        test_score_tf_data = np.concatenate([test_score_features, test_score_jet_scores], axis=-1)
 
         # Save transformed data (one hlvl/llvl file per raw test sample)
         print(f"Saving transformed data to {source}")

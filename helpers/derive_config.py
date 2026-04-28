@@ -113,9 +113,22 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         dim_in = int(resolved_net["dim_in"])
         cfg.model.net.dim_in = dim_in + n_preprocessed_features
 
+    # LGATr with parametrized (ratio / joint) experiments routes θ through the
+    # scalar pathway — θ is Lorentz-invariant so it doesn't belong on the
+    # multivector path, and using scalar channels avoids burning GA ops on
+    # 15-of-16 zero slots. Local / CNF LGATr variants don't take θ as encoder
+    # input, so they keep the default in_s_channels.
+    if model_key == "lgatr" and cfg.exp.key in ("ratio", "joint"):
+        theta_dim_val = int(cfg.dataset.theta_dim)
+        cfg.model.net.in_s_channels = theta_dim_val
+        cfg.model.net.out_s_channels = theta_dim_val
+
     if use_preprocessed and model_key == "lgatr":
-        cfg.model.net.in_s_channels = n_preprocessed_features
-        cfg.model.net.out_s_channels = n_preprocessed_features
+        resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+        in_s = int(resolved_net.get("in_s_channels", 0) or 0)
+        out_s = int(resolved_net.get("out_s_channels", 0) or 0)
+        cfg.model.net.in_s_channels = in_s + n_preprocessed_features
+        cfg.model.net.out_s_channels = out_s + n_preprocessed_features
 
     # CNF uses LGATr as its encoder, so it shares the scalar-channel plumbing.
     if use_preprocessed and model_key == "cnf":
@@ -161,6 +174,26 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
         n_scalar = int(resolved_net["n_scalar"])
         cfg.model.net.n_scalar = n_scalar + n_met_features
+
+    # The Transformer's structured input projection routes input scalars
+    # (theta + preprocessed + met) through a separate branch from the
+    # particle 4-momentum, and only the latter feeds the per-head vector
+    # slots. The wrapper concatenates [scalars | 4-momentum] with the 4-vector
+    # last, so we pass the count of input 4-vectors (1 in particles mode, 0
+    # in features mode) and the per-head scalar/vector layout. These also
+    # determine LLoCa attention's transport, but the structured layer applies
+    # regardless of LLoCa being active.
+    if model_key == "transformer":
+        n_input_vectors = 1 if transformer_input == "particles" else 0
+        lloca_block = cfg.model.get("LLoCa", {}) or {}
+        n_head_scalars = int(lloca_block.get("LLoCa_num_scalars", 0) or 0)
+        n_head_vectors = int(lloca_block.get("LLoCa_num_vectors", 0) or 0)
+        if n_input_vectors == 0:
+            # Features mode has no input 4-vector to populate vector slots.
+            n_head_vectors = 0
+        cfg.model.net.n_input_vectors = n_input_vectors
+        cfg.model.net.lloca_num_scalars = n_head_scalars
+        cfg.model.net.lloca_num_vectors = n_head_vectors
 
     # Load the right dataset corresponding to model type.
     # MLP and histos models use feature-level inputs while LGATr and

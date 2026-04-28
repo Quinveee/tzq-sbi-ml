@@ -14,7 +14,12 @@ key: ensemble
 #   model: ["","lgatr"]
 #   runs: [ [1, 2, 3], [1, 2, 3]]
 
+# checkpoints_from:
+#   exp: ["histo", "local", "local", "local", "local"]
+#   model: ["", "mlp", "transformer", "lgatr", "lorentznet"]
+#   runs: [ [1, 2, 3], [1], [1], [1], [1] ]
+
 checkpoints_from:
   exp: ["histo", "local", "local", "local"]
-  model: ["", "mlp", "transformer", "lgatr"]
-  runs: [ [1, 2, 3], [1, 2, 3], [1, 2, 3] , [1, 2, 3] ]
+  model: ["", "transformer", "lgatr", "lorentznet"]
+  runs: [ [1, 2, 3], [1], [1], [1] ]

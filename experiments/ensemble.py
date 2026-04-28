@@ -29,6 +29,7 @@ MODEL2LABEL = {
     "mlp": "MLP",
     "lgatr": "LGATr",
     "transformer": "Transformer",
+    "lorentznet": "LorentzNet",
     "": "2D Histogram",
 }
 

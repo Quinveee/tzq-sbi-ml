@@ -6,25 +6,9 @@ key: mlp
 
 net:
   _target_: models.mlp.MLP
-  # 35 raw features + 18 NaN-presence mask columns appended by Normalizer
-  # (cols 2-7, 10-15, 18-23 are optional jet-slot kinematics that can be NaN).
-  n_observables: 53
-  k_hidden: 16 # arcturo used 4
-  hidden_layers: 3 # arcturo used 2
+  n_observables: ... # Dynamically derived from data width
+  k_hidden: 20 # arcturo used 4
+  hidden_layers: 4 # arcturo used 2
   activation: gelu
   dropout: ${train.dropout}
   dim_out: ... # Dynamically derived
-
-train:
-  lr: 2e-4
-  epochs: 70
-  dropout: 0.1
-  lr_warmup: 10
-  lr_min: 2e-5
-  lr_restart_period: 20
-  lr_restart_mult: 2
-  weight_decay: 1e-4
-  batch_size: 128
-  clip_grad_norm: 1
-  validation_split: 0.2
-  clamp_samples: null
