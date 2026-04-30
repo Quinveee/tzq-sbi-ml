@@ -10,18 +10,18 @@ defaults:
 train:
   lr: 2e-4 # used in original LGATr paper
   epochs: 30
-  dropout: 0.15
-  lr_warmup: 10
+  dropout: 0.10
+  lr_warmup: 5
   lr_min: 2e-5
-  lr_restart_period: 20
+  lr_restart_period: 25
   lr_restart_mult: 2
-  weight_decay: 1e-4
-  batch_size: 128
-  clip_grad_norm: 1
+  weight_decay: 1e-5
+  batch_size: 512
+  clip_grad_norm: 5
   validation_split: 0.2
   clamp_samples: null
-  val_smoothing: 5 # moving-avg window over val loss (epochs)
-  val_calibration_weight: 0.1 # λ on calibration error (ratio experiments only)
+  val_smoothing: 1 # moving-avg window over val loss (epochs)
+  val_calibration_weight: 0.0 # λ on calibration error (ratio experiments only)
 
 devices:
   device: gpu

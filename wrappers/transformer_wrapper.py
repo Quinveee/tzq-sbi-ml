@@ -24,6 +24,11 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
     """
 
     def __init__(self, *args, **kwds):
+        # `mode` lives on cfg.model so the experiment can forward it via
+        # embedding_kwargs at call time; absorb it here so it doesn't reach
+        # BaseWrapper (which only accepts net + key). Stored on `self` after
+        # super().__init__() to satisfy nn.Module's setattr ordering.
+        mode = kwds.pop("mode", "channels")
         # Extract LLoCa configuration before passing to parent
         lloca_config = kwds.pop("LLoCa", {})
         lloca = lloca_config.get("active", None)
@@ -48,6 +53,7 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         kwds["key"] = "transformer_lloca" if lloca else "Transformer"
         super().__init__(*args, **kwds)
 
+        self.mode = mode
         self.lloca = lloca
         self.lloca_frames = lloca_frames
         self.lloca_num_scalars = lloca_num_scalars
