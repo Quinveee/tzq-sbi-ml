@@ -10,6 +10,17 @@ input_level: particles # particles|features
 # Has no effect on the local/non-parametrized transformer. LLoCa requires 'channels'.
 mode: channels # channels|tokens
 
+# Optional θ encoder: lifts θ from theta_dim to a wider embedding via a small
+# MLP before concatenation onto particle tokens. Useful when theta_dim is much
+# smaller than the particle / scalar feature width and the network collapses
+# to a θ-independent solution. Channels mode only.
+theta_encoder:
+  enabled: false
+  hidden: 8
+  out: 6
+  layers: 2
+  activation: relu
+
 LLoCa:
   active: false # whether to make the data lorentz equivariant
   LLoCa_frames: 5 # retained for backwards compatibility (unused by learnable frame path)

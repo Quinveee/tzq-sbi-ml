@@ -175,6 +175,29 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         n_scalar = int(resolved_net["n_scalar"])
         cfg.model.net.n_scalar = n_scalar + n_met_features
 
+    # Optional θ encoder: a small MLP lifts θ from theta_dim to a wider
+    # embedding before concatenation. Adjust dim_in (which currently includes
+    # raw theta_dim) to use the encoder's output dim, and stash theta_dim into
+    # the encoder config so the wrapper can size the input layer.
+    if model_key == "transformer":
+        enc_cfg = cfg.model.get("theta_encoder", {}) or {}
+        if enc_cfg.get("enabled", False):
+            if cfg.exp.key not in ("ratio", "joint"):
+                raise ValueError(
+                    "theta_encoder is only meaningful for parametrized "
+                    "experiments (ratio / joint)."
+                )
+            theta_dim = int(cfg.dataset.theta_dim)
+            theta_emb_dim = int(enc_cfg.get("out", 0) or 0)
+            if theta_emb_dim <= 0:
+                raise ValueError(
+                    f"theta_encoder.out must be > 0, got {theta_emb_dim}"
+                )
+            resolved_net = OmegaConf.to_container(cfg.model.net, resolve=True)
+            dim_in = int(resolved_net["dim_in"])
+            cfg.model.net.dim_in = dim_in - theta_dim + theta_emb_dim
+            cfg.model.theta_encoder.in_dim = theta_dim
+
     # The Transformer's structured input projection routes input scalars
     # (theta + preprocessed + met) through a separate branch from the
     # particle 4-momentum, and only the latter feeds the per-head vector

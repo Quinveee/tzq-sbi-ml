@@ -6,7 +6,7 @@ import torch
 import tqdm as tqdm
 
 from models.ParT.ParticleTransformer import ParticleTransformer
-from models.MIParT.MIParticleTransformer import MIParticleTransformerWrapper
+# from models.MIParT.MIParticleTransformer import MIParticleTransformerWrapper
 
 # Simple wrapper for ParT to match checkpoint structure
 class ParTWrapper(torch.nn.Module):
@@ -256,16 +256,16 @@ class BasePreprocessing:
         # ], axis=-1)
 
         high_level_features = np.concatenate([
-            m_all,
-            h_t,
-            lead_pt,
-            lead_eta,
-            m_12,
-            eta_std,
-            phi_std,
+            # m_all,
+            # h_t,
+            # lead_pt,
+            # lead_eta,
+            # m_12,
+            # eta_std,
+            # phi_std,
             met_pt_feat,
-            met_phi_feat,
-            met_mT
+            met_phi_feat
+            # met_mT
         ], axis=-1)
 
         # TODO: maybe try a different normalization strategy for the high level features

@@ -76,14 +76,34 @@ class SALLY(Loss):
         return F.mse_loss(output.pred.score, output.target.score)
 
 
+# class CARL(Loss):
+#     REQUIRES_SCORE = False
+
+#     @classmethod
+#     def forward(cls, output, **kwds):
+#         return F.binary_cross_entropy_with_logits(
+#             -output.pred.log_ratio, output.target.label
+#         )
+
 class CARL(Loss):
     REQUIRES_SCORE = False
 
     @classmethod
     def forward(cls, output, **kwds):
-        return F.binary_cross_entropy_with_logits(
-            -output.pred.log_ratio, output.target.label
+        y = output.target.label.reshape(-1, 1)
+        logits = -output.pred.log_ratio
+
+        bce = F.binary_cross_entropy_with_logits(
+            logits, y, reduction="none"
         )
+
+        mask_ref = y
+        mask_theta = 1.0 - y
+
+        loss_ref = (mask_ref * bce).sum() / mask_ref.sum().clamp_min(1.0)
+        loss_theta = (mask_theta * bce).sum() / mask_theta.sum().clamp_min(1.0)
+
+        return loss_ref + loss_theta
 
 
 class ROLR(Loss):

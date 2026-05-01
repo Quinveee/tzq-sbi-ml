@@ -5,6 +5,7 @@ Transormer architecture wrappers
 from abc import ABC, abstractmethod
 
 import torch
+import torch.nn as nn
 from torch.nn.attention import sdpa_kernel
 from torch_geometric.utils import scatter
 
@@ -293,7 +294,89 @@ class LocalTransformerWrapper(BaseTransformerWrapper):
         return torch.cat(extra + [tokens], dim=-1)
 
 
+_ACTIVATIONS = {
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+    "silu": nn.SiLU,
+    "tanh": nn.Tanh,
+}
+
+
+def _build_theta_encoder(
+    in_dim: int, hidden: int, out_dim: int, layers: int, activation: str
+) -> nn.Module:
+    if activation not in _ACTIVATIONS:
+        raise ValueError(
+            f"Unknown theta_encoder activation {activation!r}; "
+            f"choose from {list(_ACTIVATIONS)}"
+        )
+    Act = _ACTIVATIONS[activation]
+    layers = max(int(layers), 1)
+    if layers == 1:
+        return nn.Linear(in_dim, out_dim)
+    modules: list[nn.Module] = [nn.Linear(in_dim, hidden), Act()]
+    for _ in range(layers - 2):
+        modules += [nn.Linear(hidden, hidden), Act()]
+    modules.append(nn.Linear(hidden, out_dim))
+    return nn.Sequential(*modules)
+
+
 class ParametrizedTransformerWrapper(BaseTransformerWrapper):
+    def __init__(self, *args, **kwds):
+        # Pop the encoder config before BaseTransformerWrapper sees the kwargs.
+        # When disabled this is a no-op; when enabled we build a small MLP that
+        # lifts θ to a wider embedding before concat / frame conditioning.
+        encoder_cfg = kwds.pop("theta_encoder", None) or {}
+        super().__init__(*args, **kwds)
+
+        if encoder_cfg.get("enabled", False):
+            if self.mode != "channels":
+                raise ValueError(
+                    "theta_encoder is only supported with mode='channels'; "
+                    "tokens mode places θ components in dedicated slots and "
+                    "is incompatible with a learned θ embedding."
+                )
+            in_dim = int(encoder_cfg.get("in_dim", 0) or 0)
+            out_dim = int(encoder_cfg.get("out", 0) or 0)
+            if in_dim <= 0 or out_dim <= 0:
+                raise ValueError(
+                    "theta_encoder requires in_dim>0 and out>0, got "
+                    f"in_dim={in_dim}, out={out_dim}. Make sure derive_config "
+                    "populated theta_encoder.in_dim from dataset.theta_dim."
+                )
+            self.theta_encoder = _build_theta_encoder(
+                in_dim=in_dim,
+                hidden=int(encoder_cfg.get("hidden", 64)),
+                out_dim=out_dim,
+                layers=int(encoder_cfg.get("layers", 2)),
+                activation=str(encoder_cfg.get("activation", "relu")),
+            )
+        else:
+            self.theta_encoder = None
+
+    def forward(
+        self,
+        particles: torch.Tensor,
+        ptr: torch.Tensor,
+        force_math: bool = False,
+        embedding_kwargs={},
+    ) -> torch.Tensor:
+        # Encode θ once at the top so the frame predictor and the embed step
+        # see the same lifted representation.
+        if self.theta_encoder is not None:
+            theta = embedding_kwargs.get("theta", None)
+            if theta is None:
+                raise ValueError(
+                    "theta_encoder is enabled but embedding_kwargs has no 'theta'"
+                )
+            embedding_kwargs = {**embedding_kwargs, "theta": self.theta_encoder(theta)}
+        return super().forward(
+            particles=particles,
+            ptr=ptr,
+            force_math=force_math,
+            embedding_kwargs=embedding_kwargs,
+        )
+
     def embed(
         self,
         particles: torch.Tensor,
