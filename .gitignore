@@ -13,6 +13,7 @@ tests/
 scripts/asimov_sanity.py
 scripts/ratio_bias_check.py
 scripts/ratio_bias_check.sbatch
+wandb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

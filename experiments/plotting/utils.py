@@ -85,7 +85,7 @@ def plot_llr(
     pairs = list(combinations(range(N), 2))
     ncols = len(pairs)
     nrows = 1
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5.5 * nrows))
     axes = np.atleast_1d(axes).flatten()
 
     # Default styles
