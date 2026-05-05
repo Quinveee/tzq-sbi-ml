@@ -5,6 +5,6 @@ defaults:
   - _base
 
 key: 3d
-base: /data/experiment_so_cht_ctw_ctb
+base: /home/qvengelen/tzq-sbi-ml//data/experiment_so_cht_ctw_ctb
 events_file: ${.path}/experiment_so_cht_ctw_ctb.h5
 theta_dim: 3

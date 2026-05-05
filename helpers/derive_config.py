@@ -230,6 +230,26 @@ def derive_config(cfg: DictConfig) -> DictConfig:
             dataset_key = "transformer_features"
     cfg.merge_with(load_conf_from(auto_dir / "dataset" / dataset_key, merge_on="dataset"))
 
+    # MLP's input width depends on the feature file (1D and 3D have different
+    # column counts, plus the Normalizer can add NaN-presence mask cols), so
+    # n_observables has to be read off the npy header instead of interpolated.
+    if model_key == "mlp":
+        import numpy as np
+
+        src = Path(OmegaConf.to_container(cfg.dataset, resolve=True)["path"])
+        for fname in ("x_train_ratio.npy", "x_train_score.npy"):
+            candidate = src / fname
+            if candidate.exists():
+                cfg.model.net.n_observables = int(
+                    np.load(candidate, mmap_mode="r").shape[-1]
+                )
+                break
+        else:
+            raise FileNotFoundError(
+                f"Could not find x_train_ratio.npy or x_train_score.npy under {src} "
+                "to derive model.net.n_observables for MLP."
+            )
+
     # We use fixed loss functions for either LLR regression or Score regression
     # You can change them changing the symlinks in `conf/_auto/loss`
     loss_path = (auto_dir / "loss" / cfg.exp.key).with_suffix(".yaml")

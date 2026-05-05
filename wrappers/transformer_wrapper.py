@@ -30,6 +30,11 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         # BaseWrapper (which only accepts net + key). Stored on `self` after
         # super().__init__() to satisfy nn.Module's setattr ordering.
         mode = kwds.pop("mode", "channels")
+        # `theta_encoder` is shared in the transformer base config but only
+        # consumed by ParametrizedTransformerWrapper (which pops it before
+        # calling super). Absorb it here so non-parametrized subclasses don't
+        # forward it to BaseWrapper.
+        kwds.pop("theta_encoder", None)
         # Extract LLoCa configuration before passing to parent
         lloca_config = kwds.pop("LLoCa", {})
         lloca = lloca_config.get("active", None)
