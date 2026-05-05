@@ -34,7 +34,7 @@ def _tarball(cfg: DictConfig) -> Path:
 
     with tarfile.open(tarball, "w:gz") as tar:
         # Add data and possibly model checkpoints
-        tar.add(cfg.dataset.path)
+        # tar.add(cfg.dataset.path)
         if Path(cfg.data.run_dir).exists():
             tar.add(cfg.data.run_dir)
 
