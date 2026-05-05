@@ -1,64 +1,121 @@
-defaults: 
+defaults:
   - _base
   - _self_
 
 key: sweep
 
 sweep:
-  # Wandb project for the sweep and trials.
+  # Wandb project for the sweeps and trials.
   project: tzq-sbi-ml
   entity: null
 
-  # Number of trials to execute with this agent process.
-  # Set to null to keep pulling jobs until interrupted.
-  count: 20
+  # Bayesian HPO budget per model. Total trials = len(presets) * n_trials_per_model.
+  n_trials_per_model: 25
 
-  # Optional existing sweep id to resume. Keep null to create a new sweep.
-  id: null
+  # Optional: reuse pre-existing sweep ids (one per preset) to resume.
+  # Map preset_name -> wandb_sweep_id; null = create fresh sweeps.
+  sweep_ids: null
 
-  # Extra tags attached to each trial run.
-  tags: [hydra, sweep]
+  # Extra tags attached to each trial run (the preset name is added too).
+  tags: [hydra, sweep, hpo]
 
-  # Base experiment setup each trial will run.
-  # This re-composes conf/exp, conf/model, conf/dataset, and conf/launcher.
-  # Launcher must currently be local so trials run inside the sweep agent process.
+  # Base experiment setup each trial will run. The model key is overridden
+  # per-trial by the active preset; everything else is composed from these.
+  # IMPORTANT: target.launcher must stay 'local' — trials run in-process so
+  # the wandb agent can capture metrics. To run the *sweep itself* on the
+  # cluster, use the top-level launcher instead, e.g.:
+  #   python main.py exp=sweep launcher=htcondor launcher.job_category=long
   target:
     exp: ratio
-    model: transformer
+    model: transformer    # placeholder; overridden per-preset below
     dataset: 1d
     launcher: local
 
-  # Static overrides applied to every trial.
-  # Use dotted keys to target any Hydra/OmegaConf path.
+  # Static overrides applied to every trial. The base hyperparameters from
+  # conf/config.yaml are intentionally kept as fall-throughs (the search
+  # space below replaces them per trial). modes are forced for HPO.
   fixed:
     modes.train: true
     modes.eval: false
     modes.plot: false
-    train.epochs: 20
     modes.recycle: false
 
-  # Native wandb sweep specification.
-  # Parameter names are dotted config paths and are directly applied to cfg.
+  # Virtual model presets: one wandb sweep is created per preset, sharing the
+  # search space defined in `spec`. 'lloca' = transformer + LLoCa.active=true.
+  presets:
+    mlp:
+      model.key: mlp
+    transformer:
+      model.key: transformer
+    lloca:
+      model.key: transformer
+      model.LLoCa.active: true
+    lorentznet:
+      model.key: lorentznet
+    lgatr:
+      model.key: lgatr
+
+  # Parallel orchestration. Workers pull jobs (sweep_id slots) from a shared
+  # queue and call wandb.agent(count=1) for each — gives natural round-robin
+  # across the per-preset sweeps and dynamic load balancing if one model is
+  # faster than others. CUDA MPS lets multiple workers share one GPU.
+  parallel:
+    enabled: true
+    mps: true                # set false to disable MPS (debug / no-mps GPUs)
+    max: 16                  # hard cap on workers regardless of probe outcome (raise for >4 GPUs)
+    safety_margin: 0.80      # fraction of GPU memory available for workers
+    n_override: null         # int to bypass the auto-probe (e.g. 5 = 1/preset)
+    probe:
+      enabled: true
+      preset: lgatr          # auto-probe with the heaviest expected model
+      timeout_s: 600
+      fallback_gb: 4.0       # used if the probe fails
+
+  # Wandb sweep specification (shared across the per-preset sweeps).
   spec:
-    name: ratio-multi-model-1d
+    name: hpo                # actual name = "<this>-<preset>"
     method: bayes
     metric:
       name: loss/val_best
       goal: minimize
+    early_terminate:
+      type: hyperband
+      min_iter: 5
+      eta: 2
     parameters:
-      model.key:
-        values: [transformer]
       train.lr:
         distribution: log_uniform_values
-        min: 0.0001
-        max: 0.01
-      train.batch_size:
-        values: [64, 256, 512]
+        min: 5.0e-5
+        max: 1.0e-3
       train.dropout:
         distribution: uniform
-        min: 0.05
-        max: 0.2
+        min: 0.0
+        max: 0.3
       train.lr_warmup:
-        values: [0, 1, 2, 4]
+        values: [0, 2, 5, 10]
+      train.lr_min:
+        distribution: log_uniform_values
+        min: 1.0e-7
+        max: 1.0e-4
+      train.lr_restart_period:
+        values: [10, 25, 50]
+      train.lr_restart_mult:
+        values: [1, 2, 3]
+      train.weight_decay:
+        distribution: log_uniform_values
+        min: 1.0e-6
+        max: 1.0e-3
+      train.batch_size:
+        values: [128, 256, 512, 1024]
       train.clip_grad_norm:
-        values: [1, 2, 5]
+        values: [1, 2, 5, 10]
+      # train.val_smoothing:
+      #   values: [1, 3, 5]
+      # train.val_calibration_weight:
+      #   distribution: uniform
+      #   min: 0.0
+      #   max: 1.0
+      loss.log_r_clip:
+        distribution: uniform
+        min: 2.0
+        max: 8.0
