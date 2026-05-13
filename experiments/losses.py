@@ -69,7 +69,7 @@ class ALICE(Loss):
 
 
 class SALLY(Loss):
-    REQUIRES_SCORE = True
+    REQUIRES_SCORE = False
 
     @classmethod
     def forward(cls, output, **kwds):

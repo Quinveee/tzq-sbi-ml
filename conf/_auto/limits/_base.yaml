@@ -1,4 +1,4 @@
-test_split: 0.2
+test_split: 0.3 # validaation split of the h5 file is unused, so we can use the full 30% for asimov
 luminosity: 300000 # for llr rate
 n_toys: 10000
 theta_ranges: ???

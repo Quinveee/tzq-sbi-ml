@@ -4,11 +4,20 @@ import math
 from dataclasses import replace
 from typing import Mapping
 
+import torch
 import torch.nn as nn
 
 from .configs import MLPConfig, SAConfig
 from .modules.structured import StructuredLinearIn
 from .modules.te import TE
+
+
+_ACTIVATIONS = {
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+    "tanh": nn.Tanh,
+    "silu": nn.SiLU,
+}
 
 
 def derive_emb_hidden(dim_in: int, emb_factor: int, num_heads: int) -> int:
@@ -47,9 +56,57 @@ class Transformer(nn.Module):
     lloca_num_scalars: int = 0,
     lloca_num_vectors: int = 0,
     n_input_vectors: int = 0,
+    input_proj: Mapping | None = None,
     ) -> None:
         super().__init__()
-        emb_hidden = derive_emb_hidden(dim_in, emb_factor, attention.num_heads)
+        n_input_vectors = int(n_input_vectors or 0)
+        if 4 * n_input_vectors > dim_in:
+            raise ValueError(
+                f"4 * n_input_vectors={4 * n_input_vectors} exceeds dim_in={dim_in}"
+            )
+        n_scalar_in_raw = dim_in - 4 * n_input_vectors
+
+        # Optional scalar pre-projection: a small MLP that maps the variable-
+        # size scalar slice of the input (n_scalar_in_raw) to a fixed
+        # `scalar_dim`. After this MLP, the token shape fed to the rest of the
+        # network is `scalar_dim + 4 * n_input_vectors` — constant across
+        # input-feature variants, so linear_in and the transformer body are
+        # structurally identical. The 4-vector slice is passed through
+        # untouched, so Lorentz covariance is preserved.
+        self.scalar_pre_proj: nn.Sequential | None = None
+        self.n_input_vectors = n_input_vectors
+        self.n_scalar_in_raw = n_scalar_in_raw
+        if input_proj is not None and input_proj.get("scalar_dim") is not None:
+            scalar_dim = int(input_proj["scalar_dim"])
+            scalar_layers = int(input_proj.get("scalar_layers", 1) or 0)
+            scalar_hidden = input_proj.get("scalar_hidden")
+            act_name = str(input_proj.get("activation", "relu")).lower()
+            act_cls = _ACTIVATIONS[act_name]
+            hidden = int(scalar_hidden) if scalar_hidden is not None else scalar_dim
+            if n_scalar_in_raw > 0:
+                if scalar_layers <= 0:
+                    self.scalar_pre_proj = nn.Sequential(
+                        nn.Linear(n_scalar_in_raw, scalar_dim)
+                    )
+                else:
+                    layers: list[nn.Module] = [
+                        nn.Linear(n_scalar_in_raw, hidden),
+                        act_cls(),
+                    ]
+                    for _ in range(scalar_layers - 1):
+                        layers += [nn.Linear(hidden, hidden), act_cls()]
+                    layers.append(nn.Linear(hidden, scalar_dim))
+                    self.scalar_pre_proj = nn.Sequential(*layers)
+                effective_n_scalar_in = scalar_dim
+            else:
+                effective_n_scalar_in = 0
+        else:
+            effective_n_scalar_in = n_scalar_in_raw
+
+        effective_dim_in = effective_n_scalar_in + 4 * n_input_vectors
+        emb_hidden = derive_emb_hidden(
+            effective_dim_in, emb_factor, attention.num_heads
+        )
 
         # Sanity-check the per-head layout regardless of LLoCa active. The
         # structured input projection enforces this layout for parametrized
@@ -81,14 +138,8 @@ class Transformer(nn.Module):
         # branches so theta-derived activations cannot leak into vector
         # channels. With n_input_vectors=0 (features wrappers) the layer
         # collapses to a plain scalar projection — equivalent to nn.Linear.
-        n_input_vectors = int(n_input_vectors or 0)
-        if 4 * n_input_vectors > dim_in:
-            raise ValueError(
-                f"4 * n_input_vectors={4 * n_input_vectors} exceeds dim_in={dim_in}"
-            )
-        n_scalar_in = dim_in - 4 * n_input_vectors
         self.linear_in = StructuredLinearIn(
-            n_scalar_in=n_scalar_in,
+            n_scalar_in=effective_n_scalar_in,
             n_vec_in=n_input_vectors,
             emb_hidden=emb_hidden,
             num_heads=attention.num_heads,
@@ -121,6 +172,19 @@ class Transformer(nn.Module):
             nn.init.xavier_uniform_(self.linear_in.scalar_proj.weight)
             if self.linear_in.scalar_proj.bias is not None:
                 nn.init.zeros_(self.linear_in.scalar_proj.bias)
+
+        # Scalar pre-projection MLP: hidden Linears use Kaiming (relu/gelu),
+        # final projection keeps Xavier.
+        if self.scalar_pre_proj is not None:
+            pre_linears = [m for m in self.scalar_pre_proj if isinstance(m, nn.Linear)]
+            for lin in pre_linears[:-1]:
+                nn.init.kaiming_normal_(lin.weight, nonlinearity="relu")
+                if lin.bias is not None:
+                    nn.init.zeros_(lin.bias)
+            nn.init.xavier_uniform_(pre_linears[-1].weight)
+            if pre_linears[-1].bias is not None:
+                nn.init.zeros_(pre_linears[-1].bias)
+
         nn.init.xavier_uniform_(self.linear_out.weight)
         if self.linear_out.bias is not None:
             nn.init.zeros_(self.linear_out.bias)
@@ -149,6 +213,18 @@ class Transformer(nn.Module):
                 nn.init.zeros_(mlp_linears[-1].bias)
 
     def forward(self, x, **attn_kwds):
+        if self.scalar_pre_proj is not None:
+            # Convention: scalars first, then 4-vectors at the trailing
+            # 4*n_input_vectors channels. The pre-projection only touches
+            # scalars, so the vector channels remain Lorentz-covariant.
+            n_scalar = self.n_scalar_in_raw
+            if self.n_input_vectors > 0:
+                scalars = x[..., :n_scalar]
+                vecs = x[..., n_scalar:]
+                scalars = self.scalar_pre_proj(scalars)
+                x = torch.cat([scalars, vecs], dim=-1)
+            else:
+                x = self.scalar_pre_proj(x)
         x = self.linear_in(x)
         for layer in self.te_blocks:
             x = layer(x, **attn_kwds)

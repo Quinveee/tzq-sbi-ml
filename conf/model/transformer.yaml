@@ -49,3 +49,19 @@ net:
   mlp:
     k_factor: 2
     activation: relu
+
+  # TODO: change this comment
+  # Scalar pre-projection. When `scalar_dim` is set, a small MLP projects the
+  # scalar slice of the input (n_scalar_in_raw = dim_in - 4*n_input_vectors)
+  # to a fixed `scalar_dim`. The 4-vector slice is passed through untouched,
+  # so Lorentz covariance is preserved. After the MLP, the token width fed to
+  # the rest of the network is `scalar_dim + 4*n_input_vectors` — constant
+  # across input-feature variants (e.g. processed/raw, ratio/score) — so
+  # linear_in and the transformer body are structurally identical.
+  # Set `scalar_dim: null` to disable the pre-projection (legacy behaviour:
+  # emb_hidden = dim_in * emb_factor).
+  input_proj:
+    scalar_dim: 9
+    scalar_layers: 1 # number of hidden layers in the scalar MLP (0 = single linear)
+    scalar_hidden: 32 # null -> defaults to scalar_dim
+    activation: relu

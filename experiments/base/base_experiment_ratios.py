@@ -10,6 +10,7 @@ import torch
 from torch.autograd import grad
 
 from ..limits import AsymptoticLimitsRatios
+from ..plotting import plot_ratio_calibration
 from .base_experiment_ml import BaseExperimentML
 from .schemas import (
     ModelOutput,
@@ -210,3 +211,13 @@ class BaseExperimentRatios(BaseExperimentML):
             ),
             target=ParametrizedTargetOutput(score=score, ratio=ratio, label=label),
         )
+
+    def plot_diagnostics(self, to=None) -> None:
+        y_pred = self.eval(self.test_loader)
+        y_true = np.log(self.test_dataset._ratios.ravel())
+        valid = np.isfinite(y_true) & np.isfinite(y_pred)
+        plot_ratio_calibration(y_true[valid], y_pred[valid], to=to)
+
+    def plot(self) -> None:
+        super().plot()
+        self.plot_diagnostics(Path(self.cfg.data.run_dir) / "ratio_calibration.png")

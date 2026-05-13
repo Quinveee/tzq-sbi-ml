@@ -21,7 +21,8 @@ request_disk    = 1GB
 request_gpus    = 1
 
 # Require V100 GPU
-requirements = regexp("V100", TARGET.GPUs_DeviceName)
+# requirements = regexp("V100", TARGET.GPUs_DeviceName)
+requirements = regexp("L40S", TARGET.GPUs_DeviceName)
 
 ########################################
 # Environment

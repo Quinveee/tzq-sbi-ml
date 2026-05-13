@@ -9,7 +9,7 @@ defaults:
 # Default parameters, are overridden by model specific parameters
 train:
   lr: 2e-4 # used in original LGATr paper
-  epochs: 70
+  epochs: 30 # 30 epochs for ratio, 70 for score
   dropout: 0.1
   lr_warmup: 10
   lr_min: 1e-5

@@ -401,10 +401,11 @@ def _plot_llr_1d(
     # Labels
     ax.set_xlabel(param_label)
     ax.set_ylabel(r"$-2\log\Lambda$")
+    _lumi_label = r"$\sqrt{s}=13.6$ TeV" + "\n" + r"$L=300~\mathrm{fb}^{-1}$"
     ax.text(
         0.9 * ax.get_xlim()[0],
         0.8 * ax.get_ylim()[-1],
-        f'{r"$\sqrt{s}=13.6$ TeV"}\n{r"$L=300~\mathrm{fb}^{-1}$"}',
+        _lumi_label,
         fontsize=18,
     )
 
@@ -439,6 +440,131 @@ def _plot_llr_1d(
     plt.close(fig)
 
     return fig, ax
+
+
+def plot_ratio_calibration(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    n_bins: int = 50,
+    to=None,
+) -> plt.Figure:
+    """True vs estimated log ratio with frequency colorbar and pull scatter.
+
+    Top panel: 2D histogram of (true, estimated) log r with a colorbar showing
+    event density, plus a diagonal y=x reference line (equal aspect).
+
+    Bottom panel: scatter of the standardized residual
+    (log r - log r_hat) / sigma_{log r_hat}, where sigma is the global std of
+    (log r_hat - log r) over all events.
+    """
+    xlabel = r"True $\log r(x)$"
+    ylabel = r"Estimated $\log \hat{r}(x)$"
+
+    fig = plt.figure(figsize=(7, 9))
+    gs = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.4, figure=fig)
+    ax_main = fig.add_subplot(gs[0])
+    ax_resid = fig.add_subplot(gs[1])
+
+    # --- Top: scatter with diagonal reference. Use percentile-based limits so
+    # a handful of outliers don't compress the bulk into a tiny corner and
+    # make a moderate-correlation cloud look "way off" the diagonal.
+    lo = float(np.percentile(np.concatenate([y_true, y_pred]), 0.5))
+    hi = float(np.percentile(np.concatenate([y_true, y_pred]), 99.5))
+    ax_main.scatter(y_true, y_pred, s=2, color="steelblue", alpha=0.3, edgecolor="none")
+    ax_main.plot([lo, hi], [lo, hi], "k--", linewidth=1.2, alpha=0.8, label="$y = x$")
+    ax_main.set_xlim(lo, hi)
+    ax_main.set_ylim(lo, hi)
+    ax_main.set_aspect("equal", adjustable="box")
+    ax_main.set_xlabel(xlabel)
+    ax_main.set_ylabel(ylabel)
+    rho = float(np.corrcoef(y_true, y_pred)[0, 1]) if y_true.size > 1 else float("nan")
+    ax_main.set_title(rf"Pearson $\rho = {rho:.3f}$", fontsize=10)
+    ax_main.legend(fontsize=10, loc="upper left")
+
+    # --- Bottom: standardized residual scatter ---
+    residual = y_true - y_pred
+    sigma = float(np.std(y_pred - y_true))
+    pull = residual / sigma if sigma > 0 else residual
+    ax_resid.scatter(y_true, pull, s=2, color="steelblue", alpha=0.3, edgecolor="none")
+    ax_resid.axhline(0.0, color="r", linestyle="--", linewidth=1.0)
+    ax_resid.set_xlim(lo, hi)
+    ax_resid.set_xlabel(xlabel)
+    ax_resid.set_ylabel(r"$(\log r - \log \hat{r}) / \sigma_{\log \hat{r}}$")
+
+    if to is not None:
+        fig.savefig(to, bbox_inches="tight", dpi=150)
+        plt.close(fig)
+
+    return fig
+
+
+def plot_score_calibration(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    param_names=None,
+    n_bins: int = 50,
+    to=None,
+) -> plt.Figure:
+    """True vs estimated score per component with frequency colorbar and pull scatter.
+
+    For multi-dimensional scores, each component gets its own column. The layout
+    mirrors plot_ratio_calibration: a 2D density histogram on top with a diagonal
+    y=x reference (equal aspect), and a standardized-residual scatter below
+    using the per-component global std of (t_hat - t) as sigma.
+    """
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    n_dims = y_true.shape[1]
+    if param_names is None:
+        param_names = [f"dim {d}" for d in range(n_dims)]
+
+    fig = plt.figure(figsize=(5 * n_dims, 9))
+    gs = GridSpec(2, n_dims, height_ratios=[3, 1], hspace=0.4, figure=fig)
+
+    for d in range(n_dims):
+        yt = y_true[:, d]
+        yp = y_pred[:, d]
+        pname = PARAM2LABEL.get(param_names[d], param_names[d])
+        xlabel = rf"True score $t$ ({pname})"
+        ylabel = rf"Estimated score $\hat{{t}}$ ({pname})"
+
+        ax_main = fig.add_subplot(gs[0, d])
+        ax_resid = fig.add_subplot(gs[1, d])
+
+        # Top: scatter with diagonal reference. Use percentile-based limits so
+        # a handful of outliers don't compress the bulk into a tiny corner and
+        # make a moderate-correlation cloud look "way off" the diagonal.
+        lo = float(np.percentile(np.concatenate([yt, yp]), 0.5))
+        hi = float(np.percentile(np.concatenate([yt, yp]), 99.5))
+        ax_main.scatter(yt, yp, s=2, color="steelblue", alpha=0.3, edgecolor="none")
+        ax_main.plot([lo, hi], [lo, hi], "k--", linewidth=1.2, alpha=0.8, label="$y = x$")
+        ax_main.set_xlim(lo, hi)
+        ax_main.set_ylim(lo, hi)
+        ax_main.set_aspect("equal", adjustable="box")
+        ax_main.set_xlabel(xlabel)
+        ax_main.set_ylabel(ylabel)
+        rho = float(np.corrcoef(yt, yp)[0, 1]) if yt.size > 1 else float("nan")
+        ax_main.set_title(rf"Pearson $\rho = {rho:.3f}$", fontsize=10)
+        ax_main.legend(fontsize=9, loc="upper left")
+
+        # Bottom: standardized residual scatter
+        residual = yt - yp
+        sigma = float(np.std(yp - yt))
+        pull = residual / sigma if sigma > 0 else residual
+        ax_resid.scatter(yt, pull, s=2, color="steelblue", alpha=0.3, edgecolor="none")
+        ax_resid.axhline(0.0, color="r", linestyle="--", linewidth=1.0)
+        ax_resid.set_xlim(lo, hi)
+        ax_resid.set_xlabel(xlabel)
+        ax_resid.set_ylabel(r"$(t - \hat{t}) / \sigma_{\hat{t}}$" if d == 0 else "")
+
+    if to is not None:
+        fig.savefig(to, bbox_inches="tight", dpi=150)
+        plt.close(fig)
+
+    return fig
 
 
 def plot_learning_curves(losses, to=None):

@@ -276,9 +276,14 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         run_model_key = f"{run_model_key}_preprocessed"
 
     cfg.data.run_model_key = run_model_key
-    cfg.data.run_dir = (
-        f"{cfg.data.run_dir_base}/{cfg.dataset.key}/{cfg.exp.key}/{run_model_key}/{cfg.data.run}"
-    )
+    if cfg.exp.key == "histo":
+        cfg.data.run_dir = (
+            f"{cfg.data.run_dir_base}/{cfg.dataset.key}/{cfg.exp.key}/{cfg.data.run}"
+        )
+    else:
+        cfg.data.run_dir = (
+            f"{cfg.data.run_dir_base}/{cfg.dataset.key}/{cfg.exp.key}/{run_model_key}/{cfg.data.run}"
+        )
 
     OmegaConf.set_struct(cfg, True)
 

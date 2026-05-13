@@ -40,6 +40,11 @@ if TYPE_CHECKING:
 
 LOGGER = _LOGGER.getChild(__name__)
 
+# Absolute project root derived from this file's location (experiments/sweep.py
+# lives one level below the project root). Used to chdir spawned workers and
+# probe subprocesses, which start in the HTCondor scratch dir, not the project.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 # ---------------------------------------------------------------------------
 # CUDA MPS / GPU helpers (single GPU per worker — mirrors utils/multi_tune.py)
@@ -173,6 +178,10 @@ def _sweep_worker_main(
     log_level: int,
 ) -> None:
     """Pull (preset, sweep_id) jobs from the queue and run one trial each."""
+    # HTCondor sets cwd to a scratch directory; workers must be in the project
+    # root so that relative conf/ paths (load_conf_from, derive_config) resolve.
+    os.chdir(str(_PROJECT_ROOT))
+
     gpu_id = worker_id % max(n_gpus, 1)
     if n_gpus > 0:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -402,9 +411,19 @@ class ExperimentSweep(BaseExperiment):
             load_conf_from(Path("conf/dataset") / target["dataset"], merge_on="dataset")
         )
         launcher_key = target["launcher"]
-        trial_cfg.merge_with(
-            load_conf_from(Path("conf/launcher") / launcher_key, merge_on="launcher")
-        )
+        # Replace launcher entirely (not merge) so stale fields from the
+        # top-level cluster launcher (e.g. htcondor's `description`) don't
+        # bleed into the trial's local launcher and cause instantiate() to
+        # pass unexpected kwargs.
+        trial_cfg.launcher = load_conf_from(Path("conf/launcher") / launcher_key)
+
+        # Strip Hydra's `defaults:` sentinel from composed groups. Hydra
+        # consumes it during composition, but `load_conf_from` is a raw
+        # OmegaConf.load — it preserves it. Left in, instantiate(cfg.exp)
+        # would pass `defaults=[...]` to BaseExperiment.__init__ and crash.
+        for group in ("exp", "model", "dataset", "launcher"):
+            if group in trial_cfg and "defaults" in trial_cfg[group]:
+                del trial_cfg[group]["defaults"]
         if launcher_key != "local":
             raise ValueError(
                 f"exp.sweep.target.launcher='{launcher_key}' is not supported. "
@@ -452,24 +471,59 @@ class ExperimentSweep(BaseExperiment):
         return derived
 
     def _run_single_trial_for_preset(self, preset_name: str) -> None:
-        """wandb agent callback executing one trial for a given preset."""
+        """wandb agent callback executing one trial for a given preset.
+
+        wandb.agent's pyagent.py wraps this in try/except and swallows any
+        exception so the agent can keep pulling trials. That's hostile for
+        debugging — a typo in the trial cfg builder makes every trial
+        silently exit in ~50ms with no metric. We catch + log + re-raise so
+        the failure shows up in stderr (and in the wandb run's output.log).
+        """
         sweep_cfg = self.sweep_cfg
         tags = list(sweep_cfg.get("tags", [])) + [f"preset:{preset_name}"]
-        run = wandb.init(
-            project=sweep_cfg.project,
-            entity=sweep_cfg.get("entity", None),
-            dir="runs/",
-            job_type="sweep-trial",
-            tags=tags,
-        )
+        LOGGER.info(f"[trial-start] preset={preset_name}")
+        run = None
         try:
+            run = wandb.init(
+                project=sweep_cfg.project,
+                entity=sweep_cfg.get("entity", None),
+                dir="runs/",
+                job_type="sweep-trial",
+                tags=tags,
+            )
             sampled = dict(wandb.config)
+            non_internal = {k: v for k, v in sampled.items() if not k.startswith("_")}
+            if not non_internal:
+                LOGGER.warning(
+                    f"[trial-start] preset={preset_name} wandb.config is empty — "
+                    "the agent did not assign hyperparameters. "
+                    "Aborting trial; nothing to train."
+                )
+                return
             sampled["_preset"] = preset_name
+            LOGGER.info(
+                f"[trial-cfg] preset={preset_name} "
+                f"sampled={ {k: non_internal[k] for k in sorted(non_internal)} }"
+            )
             trial_cfg = self._build_trial_cfg(sampled)
+            LOGGER.info(
+                f"[trial-run] preset={preset_name} model={trial_cfg.model.key} "
+                f"run_dir={trial_cfg.data.run_dir} — starting training"
+            )
             instantiate(trial_cfg.launcher)(cfg=trial_cfg)
+            LOGGER.info(f"[trial-done] preset={preset_name}")
+        except BaseException as exc:
+            # BaseException so KeyboardInterrupt/SystemExit also get logged.
+            LOGGER.exception(
+                f"[trial-crash] preset={preset_name}: {type(exc).__name__}: {exc}"
+            )
+            raise
         finally:
             if run is not None:
-                run.finish()
+                try:
+                    run.finish()
+                except Exception as fin_exc:
+                    LOGGER.warning(f"run.finish() raised: {fin_exc}")
 
     # -----------------------------------------------------------------------
     # Per-preset wandb sweep creation
@@ -583,6 +637,7 @@ class ExperimentSweep(BaseExperiment):
                     capture_output=True,
                     text=True,
                     timeout=timeout_s,
+                    cwd=str(_PROJECT_ROOT),
                 )
             except subprocess.TimeoutExpired:
                 LOGGER.warning("Probe timed out")

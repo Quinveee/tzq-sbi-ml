@@ -11,6 +11,7 @@ import numpy as np
 
 from ..limits import AsymptoticLimitsHistos
 from ..logger import LOGGER as _LOGGER
+from ..plotting import plot_score_calibration
 from .base_experiment_ml import BaseExperimentML
 from .schemas import ModelOutput, PredictionOutput, RawData, TargetOutput
 
@@ -108,3 +109,15 @@ class BaseExperimentLocal(BaseExperimentML):
         :rtype: ModelOutput
         """
         return ModelOutput(PredictionOutput(score=score_pred), TargetOutput(score))
+
+    def plot_diagnostics(self, to=None) -> None:
+        y_pred = self.eval(self.test_loader)
+        y_true = self.test_dataset._score
+        valid_pred = np.isfinite(y_pred) if y_pred.ndim == 1 else np.isfinite(y_pred).all(axis=1)
+        valid_true = np.isfinite(y_true) if y_true.ndim == 1 else np.isfinite(y_true).all(axis=1)
+        valid = valid_pred & valid_true
+        plot_score_calibration(y_true[valid], y_pred[valid], to=to)
+
+    def plot(self) -> None:
+        super().plot()
+        self.plot_diagnostics(Path(self.cfg.data.run_dir) / "score_calibration.png")

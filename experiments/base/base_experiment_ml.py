@@ -208,7 +208,8 @@ class BaseExperimentML(BaseExperiment):
             shuffle=True,
             pin_memory=self.cfg.devices.pin_memory,
             collate_fn=self.collate_fn,
-            num_workers=0,
+            num_workers=4,
+            prefetch_factor=2,
             generator=loader_gen,
         )
 
@@ -218,7 +219,8 @@ class BaseExperimentML(BaseExperiment):
             shuffle=False,   # no need to shuffle validation data
             pin_memory=self.cfg.devices.pin_memory,
             collate_fn=self.collate_fn,
-            num_workers=0,
+            num_workers=4,
+            prefetch_factor=2,
         )
 
         self.test_loader = DataLoader(
@@ -227,7 +229,8 @@ class BaseExperimentML(BaseExperiment):
             shuffle=False,   # no need to shuffle test data
             pin_memory=self.cfg.devices.pin_memory,
             collate_fn=self.collate_fn,
-            num_workers=0,
+            num_workers=4,
+            prefetch_factor=2,
         )
 
     # def _patch_data_dependent_shapes(self) -> None:
@@ -299,7 +302,7 @@ class BaseExperimentML(BaseExperiment):
         # Move model to device
         self.model = self.model.to(**self.device_kwds)
 
-        LOGGER.info(f"Model moved to {str(self.device_kwds["device"])}")
+        LOGGER.info(f"Model moved to {str(self.device_kwds['device'])}")
 
     def init_normalizer(self) -> None:
         """Set normalizer object based on model type"""
@@ -676,52 +679,54 @@ class BaseExperimentML(BaseExperiment):
 
             LOGGER.info(f"Sampled {len(x_test)} events")
 
-            # Put sampled asimov events into a torch loader for evaluation
-            # In case of histos, there will be one loader for each point in the
-            # parameter grid
-            test_loaders = self.create_lims_loaders(
-                x=x_test,
-                theta=theta_grid if not self.asymptotics_cls.NEEDS_HISTOS else None,
-            )
+            LOGGER.info("Evaluating test data ...")
+            if self.asymptotics_cls.NEEDS_HISTOS:
+                test_loaders = self.create_lims_loaders(x=x_test, theta=None)
+                preds = [self.eval(tl) for tl in test_loaders]
+            else:
+                preds = self.eval_grid(x_test, theta_grid)
 
         # If asimov is not available use mc toy
         else:
             weights_test = np.ones(len(self.test_dataset))
             n_events = len(self.test_dataset)
-            test_loaders = [self.test_loader]
-
-        LOGGER.info("Evaluating test data ...")
-        preds = [self.eval(tl) for tl in test_loaders]
+            LOGGER.info("Evaluating test data ...")
+            preds = [self.eval(self.test_loader)]
 
         # Histos if needed
         histos = None
         if self.asymptotics_cls.NEEDS_HISTOS:
-            # We need *weighted* events for histogram creation, so we
-            # resample from the training partition
-            LOGGER.info(f"Sampling train samples from train partition of {events_file}")
+            # We need *weighted* events for histogram creation. We use the
+            # *same* partition as asimov_data ("test") so that Asimov events
+            # and template histograms are drawn from the same event pool.
+            # Using the train partition causes statistical fluctuations between
+            # the two samples that bias the best-fit value (different event
+            # counts → different fluctuation pattern). Set test_split=1.0 in
+            # config to use the full dataset for both.
+            LOGGER.info(f"Sampling histo events from test partition of {events_file}")
             # Same seeding rationale as the Asimov branch above: madminer
             # uses the global np.random for event resampling.
             if self._seed is not None:
                 np.random.seed(self._seed)
-            x_train, weights_train, _ = alims.weighted_events_from_partition(
+            x_histo, weights_histo, _ = alims.weighted_events_from_partition(
                 n_draws=self.cfg.limits.n_toys,
-                partition="train",
+                partition="test",
                 test_split=self.cfg.limits.test_split,
                 thetas=theta_grid,
             )
-            x_train = self.normalizer.transform(x_train)
-            LOGGER.info(f"Sampled {len(x_train)} train events")
-            train_dataset = self.dataset_cls(
-                x=x_train,
+            x_histo = self.normalizer.transform(x_histo)
+            LOGGER.info(f"Sampled {len(x_histo)} histo events")
+            histo_dataset = self.dataset_cls(
+                x=x_histo,
                 theta=theta_grid,
                 met=getattr(self, "_use_met", False),
             )
-            train_loader = DataLoader(
-                train_dataset, batch_size=128, collate_fn=self.collate_fn
+            histo_loader = DataLoader(
+                histo_dataset, batch_size=128, collate_fn=self.collate_fn
             )
-            LOGGER.info("Evaluating train data for histograms creation ...")
-            preds_train = self.eval(train_loader)
-            histos = alims.histos(preds_train, weights_train)
+            LOGGER.info("Evaluating histo data for histogram creation ...")
+            preds_histo = self.eval(histo_loader)
+            histos = alims.histos(preds_histo, weights_histo)
 
         return alims.limits(
             predictions=preds,
@@ -755,6 +760,52 @@ class BaseExperimentML(BaseExperiment):
             )
             for t in theta
         ]
+
+    def eval_grid(
+        self,
+        x: np.ndarray,
+        theta_grid: np.ndarray,
+        chunk_size: int = 128,
+    ) -> np.ndarray:
+        """Evaluate model over a parameter grid using chunked processing.
+
+        Processes `chunk_size` grid points per forward pass by tiling x and
+        repeating theta, avoiding the overhead of one DataLoader per grid point.
+        Returns shape (n_grid, n_events).
+        """
+        self.model.eval()
+        device_kwds = self.device_kwds.copy()
+        device_kwds["device"] = device(self.cfg.devices.eval)
+        self.model = self.model.to(**device_kwds)
+        LOGGER.info(f"Model moved to {device_kwds['device']}")
+
+        x_norm = self.normalizer.transform(x)
+        n_events = len(x_norm)
+        n_grid = len(theta_grid)
+        factory_kwds = {"batch_size": 128, "collate_fn": self.collate_fn}
+        ds_kwds = {"met": getattr(self, "_use_met", False)}
+        chunks = []
+
+        LOGGER.info(f"Evaluating {n_grid} grid points in chunks of {chunk_size}")
+        for start in tqdm(range(0, n_grid, chunk_size), desc="Evaluating grid"):
+            theta_chunk = theta_grid[start : start + chunk_size]
+            n = len(theta_chunk)
+            x_tiled = np.tile(x_norm, (n, 1))
+            theta_tiled = np.repeat(theta_chunk, n_events, axis=0)
+            loader = DataLoader(
+                self.dataset_cls(x=x_tiled, theta=theta_tiled, **ds_kwds),
+                **factory_kwds,
+            )
+            preds = []
+            for batch in loader:
+                batch.to_(**device_kwds)
+                output = self._preds(batch)
+                preds.append(self._eval(output).detach())
+            chunks.append(
+                torch.cat([p.cpu() for p in preds]).numpy().reshape(n, n_events)
+            )
+
+        return np.concatenate(chunks, axis=0)  # (n_grid, n_events)
 
     def plot_learning_curves(self, to=None):
         assert self.checkpoints is not None
