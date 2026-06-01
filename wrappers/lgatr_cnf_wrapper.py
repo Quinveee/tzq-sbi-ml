@@ -24,7 +24,20 @@ from torch_geometric.utils import scatter
 
 from .base_wrapper import BaseWrapper
 from .embed import to_multivector
-from .utils import att_mask, get_backends, ptr2index
+from .utils import att_mask, derive_valid_mask, get_backends, padded_to_flat, ptr2index
+
+
+def _maybe_flatten_padded(particles, ptr):
+    """LGATrCNFWrapper still uses the flat (N_total, 4) layout internally.
+    The data pipeline pads to (B, L_max, 4); flatten at the boundary."""
+    if particles.ndim == 2:
+        return particles
+    if particles.ndim != 3:
+        raise ValueError(
+            f"Expected particles of rank 2 or 3, got shape {tuple(particles.shape)}"
+        )
+    valid_mask = derive_valid_mask(ptr, particles.shape[1]).to(particles.device)
+    return padded_to_flat(particles, valid_mask)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -92,6 +105,7 @@ class LGATrCNFWrapper(BaseWrapper):
         force_math: bool = False,
     ) -> "Tensor":
         """Returns per-event log p(z | theta) of shape (B,)."""
+        particles = _maybe_flatten_padded(particles, ptr)
         # Embed particle 4-momenta as multivectors. Theta is NOT mixed into the
         # encoder; it conditions only the flow.
         mv = to_multivector(particles)  # (1, N_tokens, 1, 16)

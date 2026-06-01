@@ -10,7 +10,14 @@ from torch.nn.attention import sdpa_kernel
 from torch_geometric.utils import scatter
 
 from .base_wrapper import BaseWrapper
-from .utils import att_mask, get_backends, ptr2index
+from .utils import (
+    att_mask,
+    derive_valid_mask,
+    flat_to_padded,
+    get_backends,
+    padded_to_flat,
+    ptr2index,
+)
 from models.modules.lorentz import (
     LLoCaFramePredictor,
     build_lloca_frames,
@@ -110,47 +117,48 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         pass
 
     @staticmethod
-    def _repeat_event_features(features: torch.Tensor, ptr: torch.Tensor) -> torch.Tensor:
-        """Broadcast event-level features to particle-level tokens."""
+    def _broadcast_event_features(
+        features: torch.Tensor, L_max: int
+    ) -> torch.Tensor:
+        """Broadcast event-level features (B, F) to per-token (B, L_max, F)."""
         if features.ndim == 1:
             features = features.unsqueeze(-1)
         if features.ndim != 2:
             raise ValueError(
                 f"Expected event-level features with shape (batch, dim), got {features.shape}"
             )
+        return features.unsqueeze(1).expand(-1, L_max, -1)
 
-        ptr = ptr.to(dtype=torch.long)
-        return features.repeat_interleave(ptr[1:] - ptr[:-1], dim=0)
-
-    def _to_particle_features(
+    def _to_token_features(
         self,
         features: torch.Tensor | None,
-        ptr: torch.Tensor,
-        n_particles: int,
+        L_max: int,
+        n_events: int,
     ) -> torch.Tensor | None:
+        """
+        Align an event-level (B, F) or already-tokenized (B, L_max, F) tensor
+        to the per-token shape (B, L_max, F). Returns None if features is None
+        or has zero last-dim.
+        """
         if features is None:
             return None
         if features.ndim == 1:
             features = features.unsqueeze(-1)
         if features.shape[-1] == 0:
             return None
-
-        if features.shape[0] == n_particles:
+        if features.ndim == 3:
             return features
-
-        n_events = int(ptr.shape[0] - 1)
         if features.shape[0] == n_events:
-            return self._repeat_event_features(features, ptr)
-
+            return self._broadcast_event_features(features, L_max)
         raise ValueError(
-            "Unable to align frame scalar features with particles: "
-            f"features shape={features.shape}, n_particles={n_particles}, n_events={n_events}"
+            "Unable to align frame scalar features with tokens: "
+            f"features shape={features.shape}, n_events={n_events}, L_max={L_max}"
         )
 
     def _collect_frame_scalars(
         self,
-        ptr: torch.Tensor,
-        n_particles: int,
+        L_max: int,
+        n_events: int,
         embedding_kwargs: dict,
     ) -> torch.Tensor | None:
         candidates = [
@@ -159,8 +167,7 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
             embedding_kwargs.get("met", None),
         ]
         aligned = [
-            self._to_particle_features(feat, ptr, n_particles)
-            for feat in candidates
+            self._to_token_features(feat, L_max, n_events) for feat in candidates
         ]
         aligned = [feat for feat in aligned if feat is not None]
         if not aligned:
@@ -171,62 +178,70 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         self,
         particles: torch.Tensor,
         ptr: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
         force_math: bool = False,
         embedding_kwargs={},
     ) -> torch.Tensor:
         """
-        Forward wrapper for the Transformer
+        Forward wrapper for the Transformer. Operates on padded inputs:
 
-        :param particles: Particles four momenta
-        :type particles: torch.Tensor
-        :param ptr: Event pointer
-        :type ptr: torch.Tensor
-        :param force_math: Whether to force non-efficient SA backends
-        :type force_math: bool
-        :param embedding_kwargs: Additional embedding keyword arguments
-        :return: Forwarder tensor
-        :rtype: Tensor
+            particles: (B, L_max, 4)
+            valid_mask: (B, L_max) bool — True for real tokens, False for pad.
 
+        `ptr` is accepted for compatibility with call sites that still hand it
+        in; if `valid_mask` is None we derive it from `ptr`. The transformer
+        body runs as batched attention with the padding mask, giving
+        O(B * L_max^2) compute instead of O((B*L_avg)^2).
         """
         backends = get_backends(force_math)
 
         mode = embedding_kwargs.get("mode", "channels")
-        theta_dim = int(embedding_kwargs.get("theta_dim", 0) or 0)
-
-        if mode == "tokens" and self.lloca:
+        if mode != "channels":
             raise ValueError(
-                "LLoCa requires particle-level tokens and is incompatible with "
-                "mode='tokens'. Use mode='channels' when LLoCa is active."
+                "Padded transformer wrapper currently supports mode='channels' "
+                "only; tokens-mode theta conditioning has not been ported."
             )
 
-        index = ptr2index(ptr, mode=mode, theta_dim=theta_dim if mode == "tokens" else 0)
-        attention_mask = att_mask(index)
+        if particles.ndim != 3:
+            raise ValueError(
+                "Padded transformer wrapper expects particles of shape "
+                f"(B, L_max, 4); got {tuple(particles.shape)}."
+            )
 
-        # Delegate embedding to subclasses
-        tokens = self.embed(particles, **embedding_kwargs)
+        B, L_max = particles.shape[0], particles.shape[1]
+        if valid_mask is None:
+            valid_mask = derive_valid_mask(ptr, L_max).to(particles.device)
+        else:
+            valid_mask = valid_mask.to(torch.bool)
 
-        # Build attn_kwargs
+        # Delegate embedding to subclasses. Subclasses return padded
+        # tokens (B, L_max, dim_in).
+        tokens = self.embed(particles, valid_mask=valid_mask, **embedding_kwargs)
+
         attn_kwargs = {}
         if self.lloca is not None:
             attn_kwargs["lloca"] = self.lloca
 
             if self.lloca:
-                raw_p = particles[:, -4:] if particles.shape[-1] > 4 else particles
+                raw_p = (
+                    particles[..., -4:]
+                    if particles.shape[-1] > 4
+                    else particles
+                )
                 if raw_p.shape[-1] != 4:
                     raise ValueError(
                         "LLoCa requires particle-level fourmomenta with last dimension 4"
                     )
 
                 frame_scalars = self._collect_frame_scalars(
-                    ptr=ptr,
-                    n_particles=raw_p.shape[0],
+                    L_max=L_max,
+                    n_events=B,
                     embedding_kwargs=embedding_kwargs,
                 )
 
                 frames = build_lloca_frames(
                     raw_p,
-                    ptr,
-                    K=self.lloca_frames,
+                    valid_mask=valid_mask,
                     frame_predictor=self.lloca_frame_predictor,
                     scalars=frame_scalars,
                 )
@@ -234,27 +249,24 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
                 attn_kwargs["frames"] = frames
                 attn_kwargs["inv_frames"] = safe_inverse_frames(frames)
 
-                # Canonicalize fourmomenta channels before entering the backbone.
                 tokens = canonicalize_input_fourmomenta(tokens, frames)
-
-                # TODO: consider normalizing the tokens here, but it may be better to let the model learn its own optimal normalization in the canonical frame.
-                # tokens = torch.nn.functional.layer_norm(tokens, tokens.shape[-1:])
-                # tokens = tokens / (tokens.norm(dim=-1, keepdim=True).clamp(min=1e-6))
 
         if self.lloca_num_scalars is not None:
             attn_kwargs["lloca_num_scalars"] = self.lloca_num_scalars
         if self.lloca_num_vectors is not None:
             attn_kwargs["lloca_num_vectors"] = self.lloca_num_vectors
 
-        # Just use allowed self-attention backends
         with sdpa_kernel(backends):
-            out = self.net(tokens, attn_mask=attention_mask, attn_kwargs=attn_kwargs)
+            out_padded = self.net(
+                tokens,
+                attn_mask=valid_mask,
+                attn_kwargs=attn_kwargs,
+            )
 
-        # Here `dim=0` represents the particles dimension
-        # We "scatter" the resulting batch using the event pointer
-        # and assume a properly set linear output head to match the
-        # desired output dimensions
-        return scatter(src=out, index=index, dim=0, reduce="mean")
+        # Masked mean over real tokens per event -> (B, dim_out)
+        weight = valid_mask.unsqueeze(-1).to(out_padded.dtype)
+        counts = weight.sum(dim=1).clamp(min=1)
+        return (out_padded * weight).sum(dim=1) / counts
 
 
 class LocalTransformerWrapper(BaseTransformerWrapper):
@@ -264,38 +276,23 @@ class LocalTransformerWrapper(BaseTransformerWrapper):
         preprocessed: torch.Tensor | None = None,
         met: torch.Tensor | None = None,
         ptr: torch.Tensor | None = None,
+        valid_mask: torch.Tensor | None = None,
         **kwds,
     ) -> torch.Tensor:
         """
-        Optionally append preprocessed event-level features and/or MET
-        to every particle token.
-
-        :param tokens: Particle four momenta
-        :type tokens: torch.Tensor
-        :param preprocessed: Event-level preprocessed features
-        :type preprocessed: torch.Tensor | None
-        :param met: Event-level MET features (pt, phi)
-        :type met: torch.Tensor | None
-        :param ptr: Event pointer
-        :type ptr: torch.Tensor | None
-        :return: Particle tokens with optional extra conditioning channels
-        :rtype: torch.Tensor
+        Append preprocessed event-level features and/or MET to every particle
+        token. Operates on padded tokens of shape (B, L_max, 4); event-level
+        features (B, F) are broadcast across the token axis.
         """
+        del ptr, valid_mask
+        L_max = tokens.shape[1]
         extra = []
-
         if preprocessed is not None and preprocessed.shape[-1] > 0:
-            if ptr is None:
-                raise ValueError("ptr is required when using preprocessed features")
-            extra.append(self._repeat_event_features(preprocessed, ptr))
-
+            extra.append(self._broadcast_event_features(preprocessed, L_max))
         if met is not None and met.shape[-1] > 0:
-            if ptr is None:
-                raise ValueError("ptr is required when using MET features")
-            extra.append(self._repeat_event_features(met, ptr))
-
+            extra.append(self._broadcast_event_features(met, L_max))
         if not extra:
             return tokens
-
         return torch.cat(extra + [tokens], dim=-1)
 
 
@@ -363,6 +360,7 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         self,
         particles: torch.Tensor,
         ptr: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
         force_math: bool = False,
         embedding_kwargs={},
     ) -> torch.Tensor:
@@ -378,6 +376,7 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         return super().forward(
             particles=particles,
             ptr=ptr,
+            valid_mask=valid_mask,
             force_math=force_math,
             embedding_kwargs=embedding_kwargs,
         )
@@ -386,156 +385,78 @@ class ParametrizedTransformerWrapper(BaseTransformerWrapper):
         self,
         particles: torch.Tensor,
         theta: torch.Tensor,
-        ptr: torch.Tensor,
+        ptr: torch.Tensor | None = None,
         preprocessed: torch.Tensor | None = None,
         met: torch.Tensor | None = None,
         mode: str = "channels",
+        valid_mask: torch.Tensor | None = None,
         **kwds,
     ) -> torch.Tensor:
         """
-        Build input tokens for the transformer.
+        Build padded input tokens (B, L_max, dim_in) for the transformer.
 
         ``mode="channels"`` concatenates θ (and optional preprocessed / MET
         features) onto every particle token — θ is a constant additive signal
-        shared across all tokens of an event.
-
-        ``mode="tokens"`` prepends ``theta_dim`` dedicated θ tokens per event,
-        mirroring the LGATr tokens convention. Each θ token places θ[i] in
-        the i-th of the first ``theta_dim`` input slots; remaining slots are
-        zero. Particle tokens zero-out the first ``theta_dim`` slots and
-        carry [particle, preprocessed, met] in the trailing slots. Total
-        input width matches ``mode="channels"``.
+        shared across all tokens of an event. Tokens-mode embedding (theta
+        as dedicated prepended tokens) is currently not supported in the
+        padded path.
         """
-        if mode == "channels":
-            return self._embed_channels(particles, theta, ptr, preprocessed, met)
-        if mode == "tokens":
-            return self._embed_tokens(particles, theta, ptr, preprocessed, met)
-        raise ValueError(f"Invalid transformer embed mode '{mode}'")
+        del ptr, valid_mask
+        if mode != "channels":
+            raise ValueError(
+                "Padded ParametrizedTransformerWrapper supports mode='channels' only."
+            )
+        return self._embed_channels(particles, theta, preprocessed, met)
 
     def _embed_channels(
         self,
         particles: torch.Tensor,
         theta: torch.Tensor,
-        ptr: torch.Tensor,
         preprocessed: torch.Tensor | None,
         met: torch.Tensor | None,
     ) -> torch.Tensor:
-        n, e = particles.shape
-        theta_dim = theta.shape[-1]
+        """particles: (B, L_max, p_dim); theta/preprocessed/met: (B, F_*)."""
+        B, L_max, _ = particles.shape
 
-        ptr = ptr.to(dtype=torch.long)
-
-        theta = theta.repeat_interleave(ptr[1:] - ptr[:-1], dim=0)
-
-        assert theta.size() == (n, theta_dim)
-
-        conditioning = [theta]
-        conditioning_dim = theta_dim
-
+        conditioning = [self._broadcast_event_features(theta, L_max)]
         if preprocessed is not None and preprocessed.shape[-1] > 0:
-            preprocessed = self._repeat_event_features(preprocessed, ptr)
-            conditioning.append(preprocessed)
-            conditioning_dim += preprocessed.shape[-1]
-
+            conditioning.append(self._broadcast_event_features(preprocessed, L_max))
         if met is not None and met.shape[-1] > 0:
-            met = self._repeat_event_features(met, ptr)
-            conditioning.append(met)
-            conditioning_dim += met.shape[-1]
+            conditioning.append(self._broadcast_event_features(met, L_max))
+        return torch.cat(conditioning + [particles], dim=-1)
 
-        tokens = torch.cat(conditioning + [particles], dim=-1)
-
-        assert tokens.size() == (n, e + conditioning_dim)
-
-        return tokens
-
-    def _embed_tokens(
-        self,
-        particles: torch.Tensor,
-        theta: torch.Tensor,
-        ptr: torch.Tensor,
-        preprocessed: torch.Tensor | None,
-        met: torch.Tensor | None,
-    ) -> torch.Tensor:
-        ptr = ptr.to(dtype=torch.long)
-        n_particles, p_dim = particles.shape
-        n_events = int(ptr.shape[0] - 1)
-        theta_dim = int(theta.shape[-1])
-        counts = ptr[1:] - ptr[:-1]
-        device = particles.device
-        dtype = particles.dtype
-
-        pre_dim = (
-            preprocessed.shape[-1]
-            if preprocessed is not None and preprocessed.shape[-1] > 0
-            else 0
-        )
-        met_dim = met.shape[-1] if met is not None and met.shape[-1] > 0 else 0
-
-        trailing_dim = p_dim + pre_dim + met_dim
-        dim_in = theta_dim + trailing_dim
-
-        tokens_per_event = counts + theta_dim
-        tokens_ptr = torch.zeros(n_events + 1, dtype=torch.long, device=device)
-        tokens_ptr[1:] = tokens_per_event.cumsum(dim=0)
-        n_total = int(tokens_ptr[-1])
-
-        out = particles.new_zeros(n_total, dim_in)
-
-        # θ tokens: one per theta component per event. θ[e, i] sits in column i
-        # of the i-th θ token; particle/extra slots stay zero.
-        theta_offsets = tokens_ptr[:-1]
-        dim_idx = torch.arange(theta_dim, device=device)
-        theta_rows = theta_offsets.unsqueeze(1) + dim_idx.unsqueeze(0)
-        theta_cols = dim_idx.unsqueeze(0).expand(n_events, -1)
-        out[theta_rows, theta_cols] = theta.to(dtype)
-
-        # Particle tokens: placed after this event's θ tokens. First theta_dim
-        # columns stay zero; particle 4-vector + optional preprocessed / MET
-        # occupy the trailing columns.
-        particle_offsets = tokens_ptr[:-1] + theta_dim
-        event_of_particle = torch.arange(n_events, device=device).repeat_interleave(counts)
-        within_event = (
-            torch.arange(n_particles, device=device)
-            - ptr[:-1].repeat_interleave(counts)
-        )
-        particle_rows = particle_offsets[event_of_particle] + within_event
-
-        cursor = theta_dim
-        out[particle_rows, cursor : cursor + p_dim] = particles
-        cursor += p_dim
-        if pre_dim > 0:
-            pre_repeated = self._repeat_event_features(preprocessed, ptr)
-            out[particle_rows, cursor : cursor + pre_dim] = pre_repeated
-            cursor += pre_dim
-        if met_dim > 0:
-            met_repeated = self._repeat_event_features(met, ptr)
-            out[particle_rows, cursor : cursor + met_dim] = met_repeated
-
-        return out
+    # `_embed_tokens` (theta as dedicated prepended tokens, flat layout) has
+    # not been ported to the padded path; it would need (B, theta_dim + L_max,
+    # dim_in) tokens with valid_mask extended across the theta slots. The
+    # transformer wrapper now rejects mode='tokens' so this is not called.
 
 
 class LocalTransformerFeaturesWrapper(LocalTransformerWrapper):
     """Transformer wrapper for feature-level local score regression."""
 
     @staticmethod
-    def _to_feature_tokens(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Split each event feature vector into one scalar token per feature."""
-        batch_size, n_features = x.shape
+    def _to_feature_tokens(
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One scalar token per feature, no padding (all tokens valid)."""
+        B, n_features = x.shape
+        tokens = x.unsqueeze(-1)  # (B, n_features, 1)
+        valid_mask = x.new_ones(B, n_features, dtype=torch.bool)
         ptr = torch.arange(
             0,
-            (batch_size + 1) * n_features,
+            (B + 1) * n_features,
             n_features,
             dtype=torch.long,
             device=x.device,
         )
-        tokens = x.reshape(-1, 1)
-        return tokens, ptr
+        return tokens, ptr, valid_mask
 
     def forward(self, x: torch.Tensor, force_math: bool = False, embedding_kwargs={}):
-        tokens, ptr = self._to_feature_tokens(x)
+        tokens, ptr, valid_mask = self._to_feature_tokens(x)
         return super().forward(
             particles=tokens,
             ptr=ptr,
+            valid_mask=valid_mask,
             force_math=force_math,
             embedding_kwargs=embedding_kwargs,
         )
@@ -545,17 +466,20 @@ class ParametrizedTransformerFeaturesWrapper(ParametrizedTransformerWrapper):
     """Transformer wrapper for feature-level ratio regression."""
 
     @staticmethod
-    def _to_feature_tokens(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size, n_features = x.shape
+    def _to_feature_tokens(
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, n_features = x.shape
+        tokens = x.unsqueeze(-1)  # (B, n_features, 1)
+        valid_mask = x.new_ones(B, n_features, dtype=torch.bool)
         ptr = torch.arange(
             0,
-            (batch_size + 1) * n_features,
+            (B + 1) * n_features,
             n_features,
             dtype=torch.long,
             device=x.device,
         )
-        tokens = x.reshape(-1, 1)
-        return tokens, ptr
+        return tokens, ptr, valid_mask
 
     def forward(
         self,
@@ -564,11 +488,12 @@ class ParametrizedTransformerFeaturesWrapper(ParametrizedTransformerWrapper):
         force_math: bool = False,
         embedding_kwargs={},
     ):
-        tokens, ptr = self._to_feature_tokens(x)
+        tokens, ptr, valid_mask = self._to_feature_tokens(x)
         embedding_kwargs = {"theta": theta, "ptr": ptr, **embedding_kwargs}
         return super().forward(
             particles=tokens,
             ptr=ptr,
+            valid_mask=valid_mask,
             force_math=force_math,
             embedding_kwargs=embedding_kwargs,
         )

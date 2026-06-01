@@ -360,42 +360,67 @@ class _EquiEdgeConv(nn.Module):
         self,
         fourmomenta: torch.Tensor,
         scalars: torch.Tensor | None,
-        ptr: torch.Tensor,
+        valid_mask: torch.Tensor,
     ) -> torch.Tensor:
-        N = fourmomenta.shape[0]
-        if N == 0:
-            return fourmomenta.new_zeros((0, self.n_vectors, 4))
+        """
+        Padded implementation. Inputs:
+            fourmomenta: (B, L, 4)
+            scalars:     (B, L, S) or None
+            valid_mask:  (B, L) bool — True for real particles.
 
-        edge_index = _edge_index_from_ptr(ptr, remove_self_loops=True)
-        src, dst = edge_index.unbind(0)
+        Returns (B, L, n_vectors, 4) with pad rows zeroed.
+        """
+        B, L, _ = fourmomenta.shape
+        if B == 0 or L == 0:
+            return fourmomenta.new_zeros((B, L, self.n_vectors, 4))
 
+        # Pairwise Lorentz inner: edge_attr[b, i, j] = <p_i, p_j>
+        p_i = fourmomenta.unsqueeze(2)  # (B, L, 1, 4)
+        p_j = fourmomenta.unsqueeze(1)  # (B, 1, L, 4)
         edge_attr = None
         if self.include_edges:
-            edge_attr = lorentz_inner(fourmomenta[src], fourmomenta[dst]).unsqueeze(-1)
-            self._maybe_init_standardization(edge_attr)
+            edge_attr = lorentz_inner(p_i, p_j).unsqueeze(-1)  # (B, L, L, 1)
+            # Standardize using only valid pairs to avoid pad contamination.
+            valid_pair = valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1)
+            self._maybe_init_standardization(edge_attr[valid_pair])
             edge_attr = (edge_attr - self.edge_mean) / self.edge_std
 
         if scalars is None:
-            scalars = fourmomenta.new_zeros((N, 0))
-        s_i, s_j = scalars[src], scalars[dst]
+            scalars = fourmomenta.new_zeros((B, L, 0))
+        s_i = scalars.unsqueeze(2).expand(-1, -1, L, -1)  # (B, L, L, S)
+        s_j = scalars.unsqueeze(1).expand(-1, L, -1, -1)  # (B, L, L, S)
         mlp_in_parts = [s_i, s_j]
         if edge_attr is not None:
             mlp_in_parts.append(edge_attr.to(s_i.dtype))
-        logits = self.mlp(torch.cat(mlp_in_parts, dim=-1))  # (E, n_vectors)
+        logits = self.mlp(torch.cat(mlp_in_parts, dim=-1))  # (B, L, L, n_vectors)
 
-        weights = _scatter_softmax(logits, src, dim_size=N)  # (E, n_vectors)
+        # Mask out self-loops and any pair touching padding. Per-receiver
+        # softmax over the j axis gives valid weights only over real keys.
+        eye = torch.eye(L, device=fourmomenta.device, dtype=torch.bool)
+        valid_pair = valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1) & ~eye
+        logits = logits.masked_fill(~valid_pair.unsqueeze(-1), float("-inf"))
 
-        fm_rel = fourmomenta[src] + fourmomenta[dst]
+        # Softmax over j (dim 2). A row with no valid keys (i.e. event of size
+        # 1, padded row, etc.) becomes all-NaN; nan_to_num below clears it.
+        weights = torch.nn.functional.softmax(logits, dim=2)
+        weights = torch.nan_to_num(weights, nan=0.0)
+
+        fm_rel = p_i + p_j  # (B, L, L, 4)
         if self.fm_norm:
             norm = lorentz_squarednorm(fm_rel).abs().sqrt().clamp_min(1e-6).unsqueeze(-1)
             fm_rel = fm_rel / norm
 
-        contribs = weights.unsqueeze(-1) * fm_rel.unsqueeze(-2)  # (E, n_vectors, 4)
-        vecs = scatter(contribs, src, dim=0, dim_size=N, reduce="sum")  # (N, n_vectors, 4)
+        # Weighted sum over j → (B, L, n_vectors, 4)
+        contribs = weights.unsqueeze(-1) * fm_rel.unsqueeze(-2)
+        vecs = contribs.sum(dim=2)
 
         if self.layer_norm:
             lnorm = lorentz_squarednorm(vecs).sum(dim=-1, keepdim=True)
             vecs = vecs / lnorm.abs().sqrt().clamp_min(1e-5).unsqueeze(-1)
+
+        # Zero pad-rows so downstream code (polar_decomposition, einsums)
+        # doesn't see undefined values.
+        vecs = vecs * valid_mask[..., None, None].to(vecs.dtype)
         return vecs
 
 
@@ -436,10 +461,11 @@ class LLoCaFramePredictor(nn.Module):
     def forward(
         self,
         fourmomenta: torch.Tensor,
-        ptr: torch.Tensor,
+        valid_mask: torch.Tensor,
         scalars: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        vecs = self.equivectors(fourmomenta, scalars=scalars, ptr=ptr)  # (N, 3, 4)
+        """fourmomenta: (B, L, 4); valid_mask: (B, L). Returns (B, L, 4, 4)."""
+        vecs = self.equivectors(fourmomenta, scalars=scalars, valid_mask=valid_mask)
         boost = vecs[..., 0, :]
         references = vecs[..., 1:, :]
         boost = clamp_boost(boost, self.gamma_max, self.gamma_hardness)
@@ -449,32 +475,62 @@ class LLoCaFramePredictor(nn.Module):
 # ------------------------------------------------------------
 # Deterministic fallback and validity checks
 # ------------------------------------------------------------
-def _fallback_frames_from_particles(particles: torch.Tensor, ptr: torch.Tensor) -> torch.Tensor:
+def _fallback_frames_from_particles(
+    particles: torch.Tensor, valid_mask: torch.Tensor
+) -> torch.Tensor:
+    """Deterministic fallback frames on padded particles.
+
+    particles: (B, L, 4); valid_mask: (B, L). Returns (B, L, 4, 4).
+
+    For each event we pick, per particle, the two real other particles with
+    smallest spatial distance as reference vectors. Events with a single
+    particle fall back to canonical x/y unit vectors. Pad rows produce
+    identity-like frames (boost=zero, refs=x,y unit) so downstream einsums
+    never see undefined data.
+    """
     device, dtype = particles.device, particles.dtype
-    ptr = ptr.long()
-    boost = particles
-    references = torch.zeros(particles.shape[0], 2, 4, device=device, dtype=dtype)
+    B, L, _ = particles.shape
+    boost = particles.clone()
+    references = torch.zeros(B, L, 2, 4, device=device, dtype=dtype)
 
-    for b in range(len(ptr) - 1):
-        s, e = int(ptr[b]), int(ptr[b + 1])
-        if e <= s:
-            continue
-        p = particles[s:e]
-        n = p.shape[0]
-        if n == 1:
-            references[s:e, 0, 1] = 1.0
-            references[s:e, 1, 2] = 1.0
-            continue
+    # Default refs: x and y unit spatial directions. These get overwritten
+    # below for events with at least 2 valid particles.
+    references[..., 0, 1] = 1.0
+    references[..., 1, 2] = 1.0
 
-        diff = p.unsqueeze(1) - p.unsqueeze(0)
-        d2 = (diff[..., 1:] ** 2).sum(-1)
-        d2.fill_diagonal_(float("inf"))
-        k = min(2, n - 1)
-        _, idx = torch.topk(d2, k=k, dim=1, largest=False)
-        refs = p[idx]
-        if k == 1:
-            refs = torch.cat((refs, refs), dim=1)
-        references[s:e] = refs[:, :2, :]
+    if L < 2:
+        return polar_decomposition(boost, references)
+
+    # Pairwise spatial distances; set distances involving padding to +inf so
+    # topk never selects them. Self-loops also masked.
+    diff = particles.unsqueeze(2) - particles.unsqueeze(1)  # (B, L, L, 4)
+    d2 = (diff[..., 1:] ** 2).sum(-1)  # (B, L, L)
+    pair_valid = valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1)
+    eye = torch.eye(L, device=device, dtype=torch.bool)
+    d2 = d2.masked_fill(~pair_valid | eye, float("inf"))
+
+    # Lengths and "events with at least 2 valid particles" mask
+    lengths = valid_mask.sum(dim=1)  # (B,)
+    has_pair = lengths >= 2
+
+    if has_pair.any():
+        # For events with valid pairs, pick top-2 closest in each row.
+        # For rows that are themselves padding, the picked values are
+        # meaningless but we'll mask their references back to defaults.
+        _, idx = torch.topk(d2, k=2, dim=2, largest=False)  # (B, L, 2)
+        # Gather: refs[b, l, k, :] = particles[b, idx[b, l, k], :]
+        idx_expanded = idx.unsqueeze(-1).expand(-1, -1, -1, 4)  # (B, L, 2, 4)
+        gathered = torch.gather(
+            particles.unsqueeze(2).expand(-1, -1, 2, -1),  # (B, L, 2, 4) of self
+            dim=1,
+            index=idx_expanded,
+        )
+        # Use gathered refs only where the event has ≥2 particles AND the row
+        # itself is a valid particle.
+        use_gathered = (
+            has_pair.unsqueeze(-1) & valid_mask
+        ).unsqueeze(-1).unsqueeze(-1)  # (B, L, 1, 1)
+        references = torch.where(use_gathered, gathered, references)
 
     return polar_decomposition(boost, references)
 
@@ -488,13 +544,13 @@ def _valid_frame_mask(trafo: torch.Tensor, det_eps: float = 1e-10) -> torch.Tens
 def _replace_invalid_frames(
     trafo: torch.Tensor,
     particles: torch.Tensor,
-    ptr: torch.Tensor,
+    valid_mask: torch.Tensor,
     det_eps: float = 1e-10,
 ) -> torch.Tensor:
     valid = _valid_frame_mask(trafo, det_eps=det_eps)
     if bool(valid.all()):
         return trafo
-    fallback = _fallback_frames_from_particles(particles, ptr)
+    fallback = _fallback_frames_from_particles(particles, valid_mask)
     return torch.where(valid.unsqueeze(-1).unsqueeze(-1), trafo, fallback)
 
 
@@ -503,22 +559,21 @@ def _replace_invalid_frames(
 # ------------------------------------------------------------
 def build_lloca_frames(
     particles: torch.Tensor,
-    ptr: torch.Tensor,
-    K: int | None = None,
+    valid_mask: torch.Tensor,
     frame_predictor: LLoCaFramePredictor | None = None,
     scalars: torch.Tensor | None = None,
 ) -> Frames:
-    """Build per-particle local Lorentz frames and return a ``Frames`` object.
+    """Build per-particle local Lorentz frames on padded particles.
 
-    The returned object caches the analytic Lorentz inverse (``g L^T g``)
-    and the determinant.
+    particles: (B, L, 4); valid_mask: (B, L). Returns a Frames whose matrices
+    have shape (B, L, 4, 4). The returned object caches the analytic Lorentz
+    inverse (``g L^T g``) and the determinant.
     """
-    _ = K  # kept for backwards compatibility with older configs
     if frame_predictor is not None:
-        trafo = frame_predictor(particles, ptr, scalars=scalars)
-        trafo = _replace_invalid_frames(trafo, particles, ptr)
+        trafo = frame_predictor(particles, valid_mask=valid_mask, scalars=scalars)
+        trafo = _replace_invalid_frames(trafo, particles, valid_mask)
     else:
-        trafo = _fallback_frames_from_particles(particles, ptr)
+        trafo = _fallback_frames_from_particles(particles, valid_mask)
     return Frames(matrices=trafo, is_global=False)
 
 
@@ -553,12 +608,16 @@ def safe_inverse_frames(frames, det_eps: float = 1e-10) -> torch.Tensor:
 
 
 def canonicalize_input_fourmomenta(tokens: torch.Tensor, frames) -> torch.Tensor:
-    """Canonicalize the last four channels of ``tokens``: ``p_local = L · p_global``."""
+    """Canonicalize the last four channels of ``tokens``: ``p_local = L · p_global``.
+
+    Shape-agnostic: tokens of shape (..., D) line up with mats of shape
+    (..., 4, 4) on the leading dims (the per-particle axis must match).
+    """
     if tokens.shape[-1] < 4:
         return tokens
     mats = _as_matrices(frames).to(tokens.dtype)
     vec = tokens[..., -4:]
-    vec_local = torch.einsum("nm,nam->na", vec, mats)
+    vec_local = torch.einsum("...m,...am->...a", vec, mats)
     vec_local = torch.nan_to_num(vec_local, nan=0.0, posinf=1e6, neginf=-1e6)
     if tokens.shape[-1] == 4:
         return vec_local
@@ -571,7 +630,12 @@ def _apply_frame_to_vector_channels(
     n_scalars: int,
     n_vectors: int,
 ) -> torch.Tensor:
-    """Apply a per-particle 4×4 transform to the vector channels of ``tensor``."""
+    """Apply a per-particle 4×4 transform to the vector channels of ``tensor``.
+
+    Generalized for both flat attention shapes (``tensor=(H, N, D)``, ``mats=(N, 4, 4)``)
+    and padded attention (``tensor=(B, H, L, D)``, ``mats=(B, L, 4, 4)``) by
+    left-padding ``mats`` with singleton head dims until ranks align.
+    """
     if n_vectors == 0:
         return tensor
     d_vec = n_vectors * 4
@@ -583,7 +647,13 @@ def _apply_frame_to_vector_channels(
     start, stop = n_scalars, n_scalars + d_vec
     mats = mats.to(tensor.dtype)
     vec = tensor[..., start:stop].reshape(*tensor.shape[:-1], n_vectors, 4)
-    vec = torch.einsum("...nvm,nam->...nva", vec, mats)
+    # Insert singleton head dim(s) into mats so its leading dims broadcast
+    # against vec's. The per-particle axis is at position -3 of mats; the new
+    # singleton goes just before it, i.e. at positive index ``mats.dim() - 3``
+    # of the current tensor (pushing the per-particle axis one step right).
+    while mats.dim() < vec.dim():
+        mats = mats.unsqueeze(mats.dim() - 3)
+    vec = torch.einsum("...vm,...am->...va", vec, mats)
     vec = torch.nan_to_num(vec, nan=0.0, posinf=1e6, neginf=-1e6)
     vec_flat = vec.reshape(*tensor.shape[:-1], d_vec)
     before = tensor[..., :start] if start > 0 else None
@@ -616,6 +686,11 @@ def lloca_dot_product_attention(
       k_global = (g L⁻¹) k_local    (using LowerIndicesFrames(InverseFrames))
       v_global = L⁻¹ v_local        (using InverseFrames)
       out_local = L out_global      (using Frames)
+
+    Works on both flat ``(H, N, D)`` and padded ``(B, H, L, D)`` Q/K/V; the
+    frame matrices are expected to have a matching per-particle axis (``(N, 4, 4)``
+    or ``(B, L, 4, 4)`` respectively). ``_apply_frame_to_vector_channels``
+    handles the rank alignment by inserting singleton head dims.
     """
     if isinstance(frames, Frames):
         frames_obj = frames

@@ -7,7 +7,7 @@ key: mlp
 net:
   _target_: models.mlp.MLP
   n_observables: ... # Dynamically derived from data width
-  k_hidden: 20 # arcturo used 4
+  k_hidden: 17 # arcturo used 4
   hidden_layers: 4 # arcturo used 2
   activation: gelu
   dropout: ${train.dropout}

@@ -28,8 +28,13 @@ class ParametrizedParticlesEvent(ParticlesEvent):
 
 @dataclass(slots=True)
 class ParticleBatch:
+    # `particles` is padded (B, L_max, 4). `valid_mask` (B, L_max) marks real
+    # tokens; False entries are padding. `ptr` is CSR-style (B+1,) and kept as
+    # a derived/compat field for downstream code that still expects the
+    # per-event boundary layout.
     particles: torch.Tensor
     ptr: torch.Tensor
+    valid_mask: torch.Tensor
     score: torch.Tensor
     preprocessed: torch.Tensor
     met: torch.Tensor

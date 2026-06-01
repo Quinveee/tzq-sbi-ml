@@ -304,6 +304,28 @@ class BaseExperimentML(BaseExperiment):
 
         LOGGER.info(f"Model moved to {str(self.device_kwds['device'])}")
 
+    def save_checkpoints(self) -> None:
+        """
+        Persist checkpoints, with a safeguard for ML experiments: never write a
+        checkpoint that has no model weights while ``modes.train`` is false.
+
+        Without this, an eval-/plot-only run on an untrained run dir would
+        fabricate a weightless ``checkpoints.pt`` (only ``limits``), and the
+        unconditional save in :meth:`BaseExperiment.run` would also overwrite an
+        existing trained checkpoint with a weightless one. In both cases eval
+        runs on randomly-initialised weights and the saved file silently masks
+        the fact that no model was ever trained here.
+        """
+        if self.checkpoints.state_dict is None and not self.cfg.modes.train:
+            LOGGER.warning(
+                "Refusing to save checkpoint: no model weights in memory and "
+                "modes.train=false. Skipping save to avoid creating/overwriting "
+                f"{self.cfg.data.run_dir / self.cfg.data.ckpts} with a weightless "
+                "checkpoint. (Train this run, or point data.run at a trained run.)"
+            )
+            return
+        super().save_checkpoints()
+
     def init_normalizer(self) -> None:
         """Set normalizer object based on model type"""
         self.normalizer = get_normalizer(str(self.model))
@@ -559,6 +581,9 @@ class BaseExperimentML(BaseExperiment):
                     f"New best score {best_score:.4f} (val loss {best_val_loss:.4f}) "
                     f"at epoch {best_epoch}"
                 )
+                self.checkpoints.state_dict = best_state_dict
+                self.checkpoints.losses = Losses(train=train_losses, val=val_losses)
+                self.save_checkpoints()
 
             if use_wandb:
                 payload = {

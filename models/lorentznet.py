@@ -1,15 +1,16 @@
 """LorentzNet architecture
 
-Adapted from https://github.com/sdogsq/LorentzNet-release/blob/main/models.py
-to operate on flattened particle tensors with an event pointer, matching the
-conventions used for the Transformer and LGATr wrappers in this project.
+Adapted from https://github.com/sdogsq/LorentzNet-release/blob/main/models.py.
+Operates on padded particle batches of shape ``(B, L_max, ...)`` with a
+``valid_mask`` of shape ``(B, L_max)`` indicating real particles. Message
+passing is the fully-connected (per event, no self-loops) variant of the
+original model, vectorized as dense ``(B, L, L)`` pair tensors and masked.
 """
 
 from __future__ import annotations
 
 import torch
 from torch import nn
-from torch_geometric.utils import scatter
 
 
 def normsq4(p: torch.Tensor) -> torch.Tensor:
@@ -24,6 +25,13 @@ def dotsq4(p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
 
 def psi(p: torch.Tensor) -> torch.Tensor:
     return torch.sign(p) * torch.log(torch.abs(p) + 1)
+
+
+def _bn_on_last(bn: nn.BatchNorm1d, x: torch.Tensor) -> torch.Tensor:
+    """Apply a BatchNorm1d (built for (N, C)) to a (..., C) tensor by
+    folding leading dims, normalizing, then unfolding."""
+    *leading, C = x.shape
+    return bn(x.reshape(-1, C)).reshape(*leading, C)
 
 
 class LGEB(nn.Module):
@@ -41,24 +49,18 @@ class LGEB(nn.Module):
         self.c_weight = c_weight
         n_edge_attr = 2  # Minkowski norm and inner product
 
-        self.phi_e = nn.Sequential(
-            nn.Linear(n_input * 2 + n_edge_attr, n_hidden, bias=False),
-            nn.BatchNorm1d(n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_hidden),
-            nn.ReLU(),
-        )
+        # phi_e has a BatchNorm in the middle; apply it manually so it works
+        # on (B, L, L, C) tensors.
+        self.phi_e_lin1 = nn.Linear(n_input * 2 + n_edge_attr, n_hidden, bias=False)
+        self.phi_e_bn = nn.BatchNorm1d(n_hidden)
+        self.phi_e_lin2 = nn.Linear(n_hidden, n_hidden)
 
-        self.phi_h = nn.Sequential(
-            nn.Linear(n_hidden + n_input + n_node_attr, n_hidden),
-            nn.BatchNorm1d(n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_output),
-        )
+        self.phi_h_lin1 = nn.Linear(n_hidden + n_input + n_node_attr, n_hidden)
+        self.phi_h_bn = nn.BatchNorm1d(n_hidden)
+        self.phi_h_lin2 = nn.Linear(n_hidden, n_output)
 
         layer = nn.Linear(n_hidden, 1, bias=False)
         nn.init.xavier_uniform_(layer.weight, gain=0.001)
-
         self.phi_x = nn.Sequential(
             nn.Linear(n_hidden, n_hidden),
             nn.ReLU(),
@@ -74,111 +76,68 @@ class LGEB(nn.Module):
         if last_layer:
             del self.phi_x
 
-    def m_model(self, hi, hj, norms, dots):
-        out = torch.cat([hi, hj, norms, dots], dim=1)
-        out = self.phi_e(out)
-        w = self.phi_m(out)
-        return out * w
+    def _phi_e(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, L, L, n_input*2 + n_edge_attr) -> (B, L, L, n_hidden)
+        h = self.phi_e_lin1(x)
+        h = _bn_on_last(self.phi_e_bn, h)
+        h = torch.relu(h)
+        h = self.phi_e_lin2(h)
+        return torch.relu(h)
 
-    def h_model(self, h, edges, m, node_attr):
-        i, _ = edges
-        agg = scatter(m, i, dim=0, dim_size=h.size(0), reduce="sum")
-        agg = torch.cat([h, agg, node_attr], dim=1)
-        return h + self.phi_h(agg)
+    def _phi_h(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, L, n_hidden + n_input + n_node_attr) -> (B, L, n_output)
+        h = self.phi_h_lin1(x)
+        h = _bn_on_last(self.phi_h_bn, h)
+        h = torch.relu(h)
+        return self.phi_h_lin2(h)
 
-    def x_model(self, x, edges, x_diff, m):
-        i, _ = edges
-        trans = x_diff * self.phi_x(m)
-        trans = torch.clamp(trans, min=-100, max=100)
-        agg = scatter(trans, i, dim=0, dim_size=x.size(0), reduce="mean")
-        return x + agg * self.c_weight
+    def forward(
+        self,
+        h: torch.Tensor,           # (B, L, n_input)
+        x: torch.Tensor,           # (B, L, 4)
+        node_attr: torch.Tensor,   # (B, L, n_node_attr)
+        edge_mask: torch.Tensor,   # (B, L, L) bool — valid pairs (no self, no pad)
+        node_mask: torch.Tensor,   # (B, L) bool — valid nodes
+    ):
+        B, L, _ = h.shape
 
-    def minkowski_feats(self, edges, x):
-        i, j = edges
-        x_diff = x[i] - x[j]
-        norms = normsq4(x_diff).unsqueeze(1)
-        dots = dotsq4(x[i], x[j]).unsqueeze(1)
-        return psi(norms), psi(dots), x_diff
+        # Pairwise Minkowski features. x_diff[b, i, j] = x[b, i] - x[b, j].
+        x_diff = x.unsqueeze(2) - x.unsqueeze(1)             # (B, L, L, 4)
+        norms = psi(normsq4(x_diff)).unsqueeze(-1)           # (B, L, L, 1)
+        dots = psi(dotsq4(x.unsqueeze(2), x.unsqueeze(1))).unsqueeze(-1)
 
-    def forward(self, h, x, edges, node_attr):
-        norms, dots, x_diff = self.minkowski_feats(edges, x)
-        m = self.m_model(h[edges[0]], h[edges[1]], norms, dots)
+        h_i = h.unsqueeze(2).expand(-1, -1, L, -1)           # (B, L, L, n_input)
+        h_j = h.unsqueeze(1).expand(-1, L, -1, -1)
+        m_in = torch.cat([h_i, h_j, norms, dots], dim=-1)
+        m = self._phi_e(m_in)                                # (B, L, L, n_hidden)
+        m = m * self.phi_m(m)                                # gate
+        # Zero out invalid pairs so they don't contribute to any aggregate.
+        m = m * edge_mask.unsqueeze(-1).to(m.dtype)
+
+        # Coordinate update (skipped on the last layer).
         if not self.last_layer:
-            x = self.x_model(x, edges, x_diff, m)
-        h = self.h_model(h, edges, m, node_attr)
+            trans = x_diff * self.phi_x(m)                   # (B, L, L, 4)
+            trans = trans * edge_mask.unsqueeze(-1).to(trans.dtype)
+            trans = torch.clamp(trans, min=-100, max=100)
+            # Per-receiver mean over the j axis (dim 2), restricted to valid neighbors.
+            denom = edge_mask.sum(dim=2, keepdim=True).clamp(min=1).unsqueeze(-1).to(trans.dtype)
+            agg = trans.sum(dim=2) / denom.squeeze(-1)       # (B, L, 4)
+            x = x + agg * self.c_weight
+
+        # Node feature update: aggregate messages by sum over j.
+        agg_m = m.sum(dim=2)                                 # (B, L, n_hidden)
+        h_in = torch.cat([h, agg_m, node_attr], dim=-1)
+        h = h + self._phi_h(h_in)
+
+        # Zero pad-rows so downstream layers don't propagate garbage statistics.
+        node_mask_f = node_mask.unsqueeze(-1).to(h.dtype)
+        h = h * node_mask_f
+        x = x * node_mask_f
         return h, x, m
 
 
-def build_fully_connected_edges(ptr: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build fully-connected (no self-loops) edge indices per event in a batch
-    of flattened particles described by `ptr`.
-    """
-    # ptr_long = ptr.to(dtype=torch.long)
-    # lengths = ptr_long[1:] - ptr_long[:-1]
-    # device = ptr_long.device
-
-    # src_list, dst_list = [], []
-    # for start, n in zip(ptr_long[:-1].tolist(), lengths.tolist()):
-    #     if n <= 1:
-    #         continue
-    #     idx = torch.arange(start, start + n, device=device)
-    #     i = idx.repeat_interleave(n)
-    #     j = idx.repeat(n)
-    #     mask = i != j
-    #     src_list.append(i[mask])
-    #     dst_list.append(j[mask])
-
-    # if not src_list:
-    #     empty = torch.empty(0, dtype=torch.long, device=device)
-    #     return empty, empty
-    # return torch.cat(src_list), torch.cat(dst_list)
-
-    ptr_long = ptr.to(dtype=torch.long)
-    lengths = ptr_long[1:] - ptr_long[:-1]
-    device = ptr_long.device
-
-    # Keep only groups with n >= 2
-    mask_groups = lengths >= 2
-    starts = ptr_long[:-1][mask_groups]
-    ns = lengths[mask_groups]
-
-    if ns.numel() == 0:
-        empty = torch.empty(0, dtype=torch.long, device=device)
-        return empty, empty
-
-    # Each group contributes n*n pairs
-    pair_counts = ns * ns
-    total = int(pair_counts.sum())
-
-    # For every output position, figure out which group it belongs to
-    group_ids = torch.repeat_interleave(
-        torch.arange(ns.numel(), device=device), pair_counts
-    )
-
-    # Position within the group's n*n block
-    pair_offsets = torch.repeat_interleave(
-        torch.cat([torch.zeros(1, dtype=torch.long, device=device),
-                   pair_counts.cumsum(0)[:-1]]),
-        pair_counts,
-    )
-    local = torch.arange(total, device=device) - pair_offsets
-
-    n_per = ns[group_ids]
-    start_per = starts[group_ids]
-
-    # local = i_local * n + j_local
-    i_local = local // n_per
-    j_local = local %  n_per
-
-    src = start_per + i_local
-    dst = start_per + j_local
-
-    keep = i_local != j_local
-    return src[keep], dst[keep]  
-
-
 class LorentzNet(nn.Module):
-    r"""LorentzNet for flattened particle batches.
+    r"""LorentzNet operating on padded particle batches.
 
     :param n_scalar: Dimension of per-particle scalar input features.
     :param n_hidden: Latent hidden dimension.
@@ -224,19 +183,25 @@ class LorentzNet(nn.Module):
 
     def forward(
         self,
-        scalars: torch.Tensor,
-        x: torch.Tensor,
-        ptr: torch.Tensor,
+        scalars: torch.Tensor,    # (B, L, n_scalar)
+        x: torch.Tensor,          # (B, L, 4)
+        valid_mask: torch.Tensor, # (B, L) bool
     ) -> torch.Tensor:
-        edges = build_fully_connected_edges(ptr)
+        B, L = valid_mask.shape
+        eye = torch.eye(L, dtype=torch.bool, device=valid_mask.device)
+        edge_mask = (
+            valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1) & ~eye
+        )  # (B, L, L)
+
         h = self.embedding(scalars)
         for layer in self.LGEBs:
-            h, x, _ = layer(h, x, edges, node_attr=scalars)
+            h, x, _ = layer(
+                h, x, node_attr=scalars,
+                edge_mask=edge_mask, node_mask=valid_mask,
+            )
 
-        # Pool over particles in each event using the pointer, then apply graph decoder
-        ptr_long = ptr.to(dtype=torch.long)
-        index = torch.arange(
-            ptr_long.numel() - 1, device=h.device
-        ).repeat_interleave(ptr_long[1:] - ptr_long[:-1])
-        pooled = scatter(h, index, dim=0, reduce="mean")
+        # Masked mean over real particles -> (B, n_hidden)
+        weight = valid_mask.unsqueeze(-1).to(h.dtype)
+        counts = weight.sum(dim=1).clamp(min=1)
+        pooled = (h * weight).sum(dim=1) / counts
         return self.graph_dec(pooled)

@@ -18,9 +18,10 @@ def _collate_particles_common(
     batch: Iterable[ParticlesEvent], extra_attrs: Optional[List[str]] = None
 ):
     """
-    Returns a batch of particles with the batch and event dimensions
-    flattened into one. A pointer is also return to later divide the particles
-    into events
+    Batch variable-length per-event particle fourmomenta into a padded
+    tensor of shape (B, L_max, 4) plus a (B, L_max) bool mask marking real
+    tokens. A CSR-style `ptr` is also returned (derived from the per-event
+    lengths) so callers that still expect the flattened layout keep working.
     """
     particles_list, lengths_list, scores_list, preprocessed_list, met_list = (
         [],
@@ -43,50 +44,45 @@ def _collate_particles_common(
         for attr in extra_lists:
             extra_lists[attr].append(torch.from_numpy(getattr(event, attr)))
 
-    # Pointer object for each event
-    lengths = torch.tensor(lengths_list)
+    lengths = torch.tensor(lengths_list, dtype=torch.long)
+
+    # Pad to (B, L_max, 4). pad_sequence handles the variable length copy.
+    particles = torch.nn.utils.rnn.pad_sequence(
+        particles_list, batch_first=True
+    )
+    L_max = particles.shape[1]
+    valid_mask = (
+        torch.arange(L_max).unsqueeze(0) < lengths.unsqueeze(1)
+    )  # (B, L_max), True for real tokens
+
+    # CSR-style ptr derived from the per-event lengths, kept for downstream
+    # consumers (lorentznet, lgatr, the existing flat code paths). Float dtype
+    # to match the previous schema.
     ptr = torch.zeros(len(batch) + 1)
     ptr[1:] = torch.cumsum(lengths, dim=0)
 
-    particles = torch.cat(particles_list, dim=0)
     scores = torch.stack(scores_list, dim=0)
     preprocessed = torch.stack(preprocessed_list, dim=0)
     met = torch.stack(met_list, dim=0)
 
     extras = {attr: torch.stack(lst, dim=0) for attr, lst in extra_lists.items()}
 
-    return particles, ptr, scores, preprocessed, met, extras
-
-
-# TODO: to be removed as LLoCa-specific collate path is fully implemented
-def _collate_particles_lloca(
-    batch: Iterable[ParticlesEvent], extra_attrs: Optional[List[str]] = None
-):
-    """
-    LLoCa-specific particle collation path.
-
-    For compatibility with the current wrapper/model interfaces, this currently returns
-    the same flattened representation as the default collate function.
-    """
-    return _collate_particles_common(batch, extra_attrs=extra_attrs)
+    return particles, ptr, valid_mask, scores, preprocessed, met, extras
 
 
 def collate_particles_fn(batch: Iterable[ParticlesEvent], lloca: bool = False) -> ParticleBatch:
     """
-    Batch particle fourmomenta, score and pointer objects
+    Batch particle fourmomenta, score and pointer objects.
 
-    :param batch: Description
-    :type batch: Iterable[ParticlesEvent]
-    :return: Description
-    :rtype: ParticleBatch
+    `lloca` is accepted for backwards compatibility but no longer changes the
+    collation path — the padded representation is what downstream code uses.
     """
-    if lloca:
-        particles, ptr, score, preprocessed, met, _ = _collate_particles_lloca(batch)
-    else:
-        particles, ptr, score, preprocessed, met, _ = _collate_particles_common(batch)
+    del lloca
+    particles, ptr, valid_mask, score, preprocessed, met, _ = _collate_particles_common(batch)
     return ParticleBatch(
         particles=particles,
         ptr=ptr,
+        valid_mask=valid_mask,
         score=score,
         preprocessed=preprocessed,
         met=met,
@@ -98,22 +94,19 @@ def parametrized_collate_particles_fn(
 ):
     """
     Batch particle fourmomenta, pointer object, score, theory parameters,
-    likelihood ratios and labels in each event
+    likelihood ratios and labels in each event.
 
-    :param batch: Description
-    :type batch: Iterable[ParametrizedParticlesEvent]
+    `lloca` is accepted for backwards compatibility but no longer changes the
+    collation path.
     """
-    if lloca:
-        particles, ptr, score, preprocessed, met, extras = _collate_particles_lloca(
-            batch, extra_attrs=["theta", "ratio", "label"]
-        )
-    else:
-        particles, ptr, score, preprocessed, met, extras = _collate_particles_common(
-            batch, extra_attrs=["theta", "ratio", "label"]
-        )
+    del lloca
+    particles, ptr, valid_mask, score, preprocessed, met, extras = (
+        _collate_particles_common(batch, extra_attrs=["theta", "ratio", "label"])
+    )
     return ParametrizedParticleBatch(
         particles=particles,
         ptr=ptr,
+        valid_mask=valid_mask,
         score=score,
         preprocessed=preprocessed,
         met=met,

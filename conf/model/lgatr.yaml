@@ -12,8 +12,8 @@ net:
   num_blocks: 8
   in_s_channels: 0
   out_s_channels: 0
-  hidden_mv_channels: 20
-  hidden_s_channels: 16
+  hidden_mv_channels: 16
+  hidden_s_channels: 30
   dropout_prob: ${train.dropout}
   attention: 
     num_heads: 8

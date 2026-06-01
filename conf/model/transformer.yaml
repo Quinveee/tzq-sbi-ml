@@ -40,7 +40,7 @@ net:
   _target_: models.transformer.Transformer
   dim_in: ... # Dynamically derived
   dim_out: ... # Dynamically derived
-  emb_factor: 20
+  emb_factor: 8
   num_blocks: 8
   dropout_p: ${train.dropout}
   attention:

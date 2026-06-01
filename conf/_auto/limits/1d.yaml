@@ -1,5 +1,5 @@
 # 1D grid
 theta_ranges: [ [-2, 2], ] # [ [-1.0, 1.0], ]
-resolutions: [128] # acturo [26]
+resolutions: [96] # acturo [26]
 asimov: 
   theta_true: [0.0]

@@ -9,6 +9,6 @@ net:
   n_scalar: ... # Dynamically derived
   dim_out: ... # Dynamically derived
   n_hidden: 128
-  n_layers: 13
+  n_layers: 9
   c_weight: 5e-3
   dropout: ${train.dropout}
