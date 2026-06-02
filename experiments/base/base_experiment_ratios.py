@@ -197,7 +197,11 @@ class BaseExperimentRatios(BaseExperimentML):
         :rtype: ModelOutput
         """
         score_pred = None
-        if self.loss_fn.REQUIRES_SCORE:
+        # The score is only needed by score-based losses during training and
+        # validation. Grid/test evaluation runs under no_grad (grad disabled),
+        # where this autograd call would both fail and waste memory by forcing
+        # a full graph — so skip it whenever gradients are off.
+        if self.loss_fn.REQUIRES_SCORE and torch.is_grad_enabled():
             (score_pred,) = grad(
                 log_ratio_pred,
                 theta,

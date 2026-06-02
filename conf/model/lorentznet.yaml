@@ -4,11 +4,16 @@ defaults:
 
 key: lorentznet
 
+# Events per forward during limit-grid / test evaluation. LorentzNet builds
+# O(L_max^2) particle edges per event, so memory grows with
+# eval_batch_size * L_max^2; keep modest to avoid OOM.
+eval_batch_size: 1024
+
 net:
   _target_: models.lorentznet.LorentzNet
   n_scalar: ... # Dynamically derived
   dim_out: ... # Dynamically derived
-  n_hidden: 128
+  n_hidden: 64
   n_layers: 9
   c_weight: 5e-3
   dropout: ${train.dropout}

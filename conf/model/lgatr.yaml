@@ -5,11 +5,13 @@ defaults:
 key: lgatr
 mode: channels # channels|tokens
 
+eval_batch_size: 1024
+
 net:
   _target_: lgatr.LGATr
   in_mv_channels: ... # Dynamically derived
   out_mv_channels: ... # Dynamically derived
-  num_blocks: 8
+  num_blocks: 2
   in_s_channels: 0
   out_s_channels: 0
   hidden_mv_channels: 16

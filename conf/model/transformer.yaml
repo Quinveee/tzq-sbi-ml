@@ -4,6 +4,9 @@ defaults:
 
 key: transformer
 input_level: particles # particles|features
+
+eval_batch_size: 1024
+
 # θ conditioning strategy for parametrized experiments:
 #   channels → concat θ (and preprocessed / MET) onto every particle token (adds theta_dim channels to dim_in)
 #   tokens   → prepend theta_dim dedicated θ tokens per event (same dim_in)
@@ -41,7 +44,7 @@ net:
   dim_in: ... # Dynamically derived
   dim_out: ... # Dynamically derived
   emb_factor: 8
-  num_blocks: 8
+  num_blocks: 2
   dropout_p: ${train.dropout}
   attention:
     num_heads: 8

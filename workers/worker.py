@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from hydra.utils import instantiate
@@ -21,6 +23,17 @@ if not OmegaConf.has_resolver("prod"):
 
     OmegaConf.register_new_resolver(
         "prod", lambda *values: _math.prod(int(v) for v in values)
+    )
+
+# `${env:cwd}` is used in the dataset configs to point at the repo-local data
+# dir. run_snellius.sh cd's into the project root before launching the worker,
+# so os.getcwd() resolves to the same path the launcher used at submit time.
+if not OmegaConf.has_resolver("env"):
+    OmegaConf.register_new_resolver(
+        "env",
+        lambda key: {"prefix": Path(sys.executable).parent, "cwd": os.getcwd()}.get(
+            key
+        ),
     )
 
 

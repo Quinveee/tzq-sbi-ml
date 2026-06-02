@@ -27,7 +27,7 @@ processed: true
 checkpoints_from:
   exp: ["histo", "local", "local", "local", "local", "local"]
   model: ["", "mlp", "transformer", "lloca", "lgatr", "lorentznet"]
-  runs: [ [4], [5], [4], [4], [5], [4]]
+  runs: [ [1,2,3], [1,2,3], [1,2,3], [1,2,3], [1,2,3], [1,2,3]]
 
 # checkpoints_from:
 #   exp: ["histo", "local", "local", "local", "local", "local"]

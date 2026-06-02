@@ -786,6 +786,19 @@ class BaseExperimentML(BaseExperiment):
             for t in theta
         ]
 
+    def _eval_batch_size(self, default: int) -> int:
+        """Resolve the per-forward batch size for grid/test evaluation.
+
+        Priority: ``model.eval_batch_size`` > ``devices.eval_batch_size`` >
+        the caller-supplied default. Attention models set a small value in
+        their model yaml so the grid sweep stays within GPU memory, while the
+        MLP can run very large batches.
+        """
+        for src in (self.cfg.get("model"), self.cfg.get("devices")):
+            if src is not None and src.get("eval_batch_size") is not None:
+                return int(src.get("eval_batch_size"))
+        return int(default)
+
     def eval_grid(
         self,
         x: np.ndarray,
@@ -807,28 +820,40 @@ class BaseExperimentML(BaseExperiment):
         x_norm = self.normalizer.transform(x)
         n_events = len(x_norm)
         n_grid = len(theta_grid)
-        factory_kwds = {"batch_size": 128, "collate_fn": self.collate_fn}
+        # Grid eval only reads log_ratio and never backprops, so we can use a
+        # larger batch than training to amortize Python/host->device overhead.
+        # Attention models (transformer/lgatr) must keep this modest — memory
+        # scales with batch_size * L_max^2 — so they set it in their model yaml.
+        eval_batch = self._eval_batch_size(default=4096)
+        factory_kwds = {"batch_size": eval_batch, "collate_fn": self.collate_fn}
         ds_kwds = {"met": getattr(self, "_use_met", False)}
         chunks = []
 
-        LOGGER.info(f"Evaluating {n_grid} grid points in chunks of {chunk_size}")
-        for start in tqdm(range(0, n_grid, chunk_size), desc="Evaluating grid"):
-            theta_chunk = theta_grid[start : start + chunk_size]
-            n = len(theta_chunk)
-            x_tiled = np.tile(x_norm, (n, 1))
-            theta_tiled = np.repeat(theta_chunk, n_events, axis=0)
-            loader = DataLoader(
-                self.dataset_cls(x=x_tiled, theta=theta_tiled, **ds_kwds),
-                **factory_kwds,
-            )
-            preds = []
-            for batch in loader:
-                batch.to_(**device_kwds)
-                output = self._preds(batch)
-                preds.append(self._eval(output).detach())
-            chunks.append(
-                torch.cat([p.cpu() for p in preds]).numpy().reshape(n, n_events)
-            )
+        LOGGER.info(
+            f"Evaluating {n_grid} grid points in chunks of {chunk_size} "
+            f"(eval batch size {eval_batch})"
+        )
+        # No gradients are needed anywhere in the grid sweep; the score is never
+        # consumed here. _preds may still force-enable grad for models that
+        # compute the score, but the per-batch .detach() below drops the graph.
+        with torch.no_grad():
+            for start in tqdm(range(0, n_grid, chunk_size), desc="Evaluating grid"):
+                theta_chunk = theta_grid[start : start + chunk_size]
+                n = len(theta_chunk)
+                x_tiled = np.tile(x_norm, (n, 1))
+                theta_tiled = np.repeat(theta_chunk, n_events, axis=0)
+                loader = DataLoader(
+                    self.dataset_cls(x=x_tiled, theta=theta_tiled, **ds_kwds),
+                    **factory_kwds,
+                )
+                preds = []
+                for batch in loader:
+                    batch.to_(**device_kwds)
+                    output = self._preds(batch)
+                    preds.append(self._eval(output).detach())
+                chunks.append(
+                    torch.cat([p.cpu() for p in preds]).numpy().reshape(n, n_events)
+                )
 
         return np.concatenate(chunks, axis=0)  # (n_grid, n_events)
 

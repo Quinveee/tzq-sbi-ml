@@ -120,7 +120,6 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
             )
         raise ValueError(f"Invalid mode {mode}")
 
-    @torch.enable_grad()
     def _preds(self, batch: ParametrizedParticleBatch):
         """
         Return model predictions
@@ -128,9 +127,15 @@ class ExperimentRatiosParticles(BaseExperimentRatios):
         :param self: Description
         :param batch: Description
         :type batch: ParametrizedParticleBatch
+
+        ::note:: Grad enabling is left to the caller. Training runs with grad
+        on by default and the validation loop wraps this in ``needs_grad``;
+        evaluation (``eval``/``eval_grid``) runs under ``no_grad`` so no
+        autograd graph is built — critical for attention models' memory.
         """
         # To later compute score based on regressed log-likelihood ratio
-        batch.theta.requires_grad_(self.loss_fn.REQUIRES_SCORE)
+        # (only effective when the caller has gradients enabled).
+        batch.theta.requires_grad_(self.loss_fn.REQUIRES_SCORE and torch.is_grad_enabled())
         embedding_kwargs = {
             "theta": batch.theta,
             "ptr": batch.ptr,

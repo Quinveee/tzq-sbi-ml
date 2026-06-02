@@ -92,6 +92,14 @@ def derive_config(cfg: DictConfig) -> DictConfig:
         if "input_level" in cfg.model:
             del cfg.model.input_level
 
+    # `eval_batch_size` controls grid/test eval batching and is read by the
+    # experiment (BaseExperimentML._eval_batch_size), not the model wrapper.
+    # Relocate it to cfg.devices so instantiate(cfg.model) doesn't pass it to
+    # the wrapper constructor (which would raise an unexpected-kwarg error).
+    if "eval_batch_size" in cfg.model:
+        cfg.devices.eval_batch_size = cfg.model.eval_batch_size
+        del cfg.model.eval_batch_size
+
     exp_model_key = f"{cfg.exp.key}_{model_key}"
     if model_key == "transformer" and transformer_input == "features":
         exp_model_key = f"{exp_model_key}_features"
