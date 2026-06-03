@@ -101,8 +101,10 @@ class Ensemble:
             will be defined in a file and loaded from there to avoid confusion
 
         """
-        # Containers for the log-likelihood ratio arrays of predictions
-        llr_all, std_all = [], []
+        # Containers for the log-likelihood ratio arrays of predictions.
+        # `runs_all` keeps the per-run LLR stacks so the marginal uncertainty
+        # band can be computed from the marginalised per-run curves.
+        llr_all, std_all, runs_all = [], [], []
 
         # Translate model string into a label appropriate for plotting
         labels_all = []
@@ -150,6 +152,18 @@ class Ensemble:
                     **torch.load(ckpts_path, map_location="cpu", weights_only=False)
                 )
 
+                if checkpoints.limits is None:
+                    raise ValueError(
+                        f"Checkpoint {ckpts_path} has no `limits` (asymptotic scan "
+                        f"was never computed for exp={exp} model={model!r} run={run}). "
+                        "Recompute it with:\n"
+                        f"    python main.py exp={exp} model={model or 'mlp'} "
+                        f"dataset={self.cfg.dataset.key} data.run={run} "
+                        "modes.train=false modes.eval=true modes.plot=false\n"
+                        "(for the LLoCa transformer add `model.LLoCa.active=true`), "
+                        "or point this entry at a run that already has limits."
+                    )
+
                 llr_this.append(checkpoints.limits.llr)
                 print(
                     f"Exp: {exp} model {model} resolutions {checkpoints.limits.resolutions}"
@@ -184,6 +198,7 @@ class Ensemble:
             # Append results to global containers
             llr_all.append(mean_llr)
             std_all.append(np.asarray(llr_this).std(axis=0))
+            runs_all.append(np.asarray(llr_this))
 
             # Keep track of which model produced which results
             labels_all.append(MODEL2LABEL[model])
@@ -195,6 +210,7 @@ class Ensemble:
         plot_llr(
             llr_list=llr_all,
             std_list=std_all,
+            runs_list=runs_all,
             param_names=names,
             grid=grid,
             ranges=ranges,
@@ -203,9 +219,23 @@ class Ensemble:
             to=str(out_dir / f"{plot_stem}.png"),
             conf_levels=(0.68,),
             colors=COLORS,
+            mode="average",
             method=method,
         )
-        plot_intervals(llr_all, grid, labels_all, to=str(out_dir / f"{plot_stem}_limits.png"), colors=COLORS, method=method)
+        # The 1D and 3D plots already include the limits in their combined
+        # figures, so only produce a standalone limits plot for the 2D case.
+        if grid is not None and grid.shape[1] == 2:
+            plot_intervals(
+                llr_all,
+                grid,
+                labels_all,
+                to=str(out_dir / f"{plot_stem}_limits.png"),
+                colors=COLORS,
+                resolutions=resolutions,
+                param_names=names,
+                mode="average",
+                method=method,
+            )
 
     def __call__(self):
         self.run()

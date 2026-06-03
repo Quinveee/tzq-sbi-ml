@@ -686,12 +686,21 @@ class BaseExperimentML(BaseExperiment):
 
             # Sample weighted events from partition dataset
             # `cfg.limits.test_split` defines where the test partition starts
-            x_test, weights_test = alims.asimov_data(
-                self.cfg.limits.asimov.theta_true,
-                self.cfg.limits.asimov.sample_only_from_closest_benchmark,
-                self.cfg.limits.test_split,
-                self.cfg.limits.asimov.n_asimov,
-            )
+            if self.cfg.exp.key == "ratio":
+                x_test, weights_test = alims.asimov_data(
+                    self.cfg.limits.asimov.theta_true,
+                    self.cfg.limits.asimov.sample_only_from_closest_benchmark,
+                    self.cfg.limits.test_split,
+                    self.cfg.limits.asimov.n_asimov_ratio,
+                )
+
+            if self.cfg.exp.key == "score":
+                x_test, weights_test, _ = alims.asimov_data(
+                    self.cfg.limits.asimov.theta_true,
+                    self.cfg.limits.asimov.sample_only_from_closest_benchmark,
+                    self.cfg.limits.test_split,
+                    self.cfg.limits.asimov.n_asimov_score,
+                )
 
             # Expected number of events (for *rate* llr estimation)
             n_events = (
@@ -733,11 +742,24 @@ class BaseExperimentML(BaseExperiment):
             # uses the global np.random for event resampling.
             if self._seed is not None:
                 np.random.seed(self._seed)
+            # Mirror asimov_data's `generated_close_to` filter so template
+            # events come from the same physical pool as the asimov (sm-bucket
+            # + backgrounds when `sample_only_from_closest_benchmark=True`).
+            # Without this, the asimov was drawn from a strict subset of the
+            # events the templates used, and the trained model — calibrated on
+            # the sm-bucket distribution — was doing out-of-distribution
+            # inference on template events from non-sm morphing benchmarks,
+            # introducing a bias in the score-histogram LLR.
             x_histo, weights_histo, _ = alims.weighted_events_from_partition(
                 n_draws=self.cfg.limits.n_toys,
                 partition="test",
                 test_split=self.cfg.limits.test_split,
                 thetas=theta_grid,
+                generated_close_to=(
+                    np.asarray(self.cfg.limits.asimov.theta_true)
+                    if self.cfg.limits.asimov.sample_only_from_closest_benchmark
+                    else None
+                ),
             )
             x_histo = self.normalizer.transform(x_histo)
             LOGGER.info(f"Sampled {len(x_histo)} histo events")

@@ -217,7 +217,7 @@ class BaseExperimentRatios(BaseExperimentML):
         )
 
     def plot_diagnostics(self, to=None) -> None:
-        y_pred = self.eval(self.test_loader)
+        y_pred = self.eval(self.test_loader).ravel()
         y_true = np.log(self.test_dataset._ratios.ravel())
         valid = np.isfinite(y_true) & np.isfinite(y_pred)
         plot_ratio_calibration(y_true[valid], y_pred[valid], to=to)

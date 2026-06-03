@@ -1,13 +1,15 @@
-test_split: 0.3 # validaation split of the h5 file is unused, so we can use the full 30% for asimov
+test_split: 0.3 # histo templates are built from the (1 - test_split) "train" partition; test_split must be in (0, 1)
 luminosity: 300000 # for llr rate
-n_toys: 10000
+n_toys: 500000
 theta_ranges: ???
 resolutions: ???
 
 asimov: 
   theta_true: ???
   sample_only_from_closest_benchmark: true
-  n_asimov: 10000 # NOTE: madminer will sample a different Asimov if this is not `null` (set seed)
+  n_asimov_ratio: 500000 # NOTE: madminer will sample a different Asimov if this is not `null` (set seed)
+  n_asimov_score: 500000
 
 # Only used when `experiment=histos`
 hist_vars: ["pt_j1", "pt_l1"]
+

@@ -19,6 +19,13 @@ plt.rcParams["font.size"] = 15
 
 PARAM2LABEL = {"cHt": r"$c_{Ht}$", "ctWRe": r"$c_{tW}$", "ctBRe": r"$c_{tB}$"}
 
+# Per-coefficient x-range for the limits panels (falls back to ±0.4)
+PARAM2LIMITXLIM = {
+    "cHt": (-0.2, 0.2),
+    "ctWRe": (-0.7, 0.7),
+    "ctBRe": (-1, 1),
+}
+
 LOGGER = _LOGGER.getChild(__name__)
 
 
@@ -26,6 +33,7 @@ def plot_llr(
     *,
     llr_list: List[np.ndarray],
     std_list: Optional[List[np.ndarray]] = None,
+    runs_list: Optional[List[np.ndarray]] = None,
     grid: np.ndarray,
     param_names: List[str],
     ranges: List[Tuple[float, float]],
@@ -77,6 +85,24 @@ def plot_llr(
             labels=labels,
             colors=colors,
             linestyles=linestyles,
+            to=to,
+            method=method,
+        )
+    if N == 3:
+        # Single combined 3x3 figure: 2D projections, marginals, and limits.
+        return _plot_llr_combined_3d(
+            llr_list=llr_list,
+            std_list=std_list,
+            runs_list=runs_list,
+            grid=grid,
+            param_names=param_names,
+            ranges=ranges,
+            resolutions=resolutions,
+            labels=labels,
+            colors=colors,
+            linestyles=linestyles,
+            conf_levels=conf_levels,
+            mode=mode,
             to=to,
             method=method,
         )
@@ -316,6 +342,200 @@ def _plot_marginals(
     plt.close(fig)
 
 
+def _reduce_llr(values_nd, others, mode, resolutions, N):
+    """Reduce an N-d ``-2logΛ`` array over the ``others`` axes to a lower-d
+    profile, matching the convention used across the LLR plots."""
+    others = tuple(others)
+    if mode == "mle":
+        return values_nd.min(axis=others)
+    if mode == "average":
+        return values_nd.mean(axis=others)
+    if mode == "slice":
+        slicer = [
+            resolutions[k] // 2 if k in others else slice(None) for k in range(N)
+        ]
+        return values_nd[tuple(slicer)]
+    raise ValueError("mode must be 'average', 'slice', or 'mle'")
+
+
+def _plot_llr_combined_3d(
+    *,
+    llr_list: List[np.ndarray],
+    std_list: Optional[List[np.ndarray]] = None,
+    runs_list: Optional[List[np.ndarray]] = None,
+    grid: np.ndarray,
+    param_names: List[str],
+    ranges: List[Tuple[float, float]],
+    resolutions: List[int],
+    labels: List[str],
+    colors=None,
+    linestyles=None,
+    conf_levels=(0.68, 0.95),
+    mode: Literal["average", "slice", "mle"] = "average",
+    to=None,
+    method: Optional[str] = None,
+) -> None:
+    """
+    Combined 3D figure laid out as a 3x3 grid sharing one title and model
+    legend:
+      - top row    : the three 2D contour projections (pairs of coefficients)
+      - middle row : the marginal profile-likelihood curve per coefficient
+      - bottom row : the confidence intervals beneath each marginal
+    """
+    N = grid.shape[1]
+
+    if colors is None:
+        colors = plt.cm.tab10.colors[: len(llr_list)]
+    if linestyles is None:
+        linestyles = ["-", "--", "-.", ":"] * ((len(llr_list) // 4) + 1)
+
+    pairs = list(combinations(range(N), 2))
+    # `conf_levels` sets the 2D contour levels (top row); the marginals and
+    # limits always show the 68% (solid) and 95% (dashed) CIs like the 1D plot.
+    ci_levels = (0.68, 0.95)
+    chi2_levels_2d = [stats.chi2.ppf(p, 2) for p in conf_levels]
+    chi2_levels_1d = [stats.chi2.ppf(p, 1) for p in ci_levels]
+
+    grid_axes = [np.unique(grid[:, d]) for d in range(N)]
+
+    fig = plt.figure(figsize=(16, 16))
+    gs = GridSpec(
+        4,
+        len(pairs),
+        height_ratios=[1.3, 4, 4, 2.2],
+        hspace=0.45,
+        wspace=0.25,
+    )
+
+    # --- Shared header: title + model legend ---
+    ax_head = fig.add_subplot(gs[0, :])
+    ax_head.axis("off")
+    if method:
+        ax_head.set_title(method, fontsize=30, pad=14)
+
+    handles = [
+        mlines.Line2D([], [], color=c, linestyle=ls, linewidth=2, label=lab)
+        for c, ls, lab in zip(colors, linestyles, labels)
+    ]
+    ax_head.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=min(len(labels), 6),
+        frameon=False,
+        fontsize=22,
+        columnspacing=1.5,
+        handlelength=1.6,
+        handletextpad=0.5,
+    )
+
+    # --- Top row: 2D contour projections ---
+    for col, (i, j) in enumerate(pairs):
+        ax = fig.add_subplot(gs[1, col])
+        others = [k for k in range(N) if k not in (i, j)]
+        xi = grid_axes[i]
+        yj = grid_axes[j]
+        X, Y = np.meshgrid(xi, yj, indexing="ij")
+
+        for llr, color, ls in zip(llr_list, colors, linestyles):
+            values_nd = -2 * llr.reshape(resolutions)
+            data_2d = _reduce_llr(values_nd, others, mode, resolutions, N)
+            data_2d = data_2d - data_2d.min()
+            for lvl, alpha in zip(
+                chi2_levels_2d, np.linspace(1.0, 0.4, len(chi2_levels_2d))
+            ):
+                ax.contour(
+                    X,
+                    Y,
+                    data_2d,
+                    levels=[lvl],
+                    colors=[color],
+                    linestyles=[ls],
+                    linewidths=1.75,
+                    alpha=alpha,
+                )
+
+        li = PARAM2LABEL.get(param_names[i], param_names[i])
+        lj = PARAM2LABEL.get(param_names[j], param_names[j])
+        ax.set_xlabel(li)
+        ax.set_ylabel(lj)
+        ax.set_title(f"({li}, {lj}) projection", fontsize=18)
+
+    # --- Middle row: marginal profile-likelihood curves ---
+    for col in range(N):
+        ax = fig.add_subplot(gs[2, col])
+        others = tuple(k for k in range(N) if k != col)
+        xi = grid_axes[col]
+        x_range = ranges[col]
+
+        for llr, color, ls in zip(llr_list, colors, linestyles):
+            values_nd = -2 * llr.reshape(resolutions)
+            profile = _reduce_llr(values_nd, others, mode, resolutions, N)
+            profile = profile - profile.min()
+            ax.plot(xi, profile, color=color, linestyle=ls, linewidth=2)
+
+        for lvl, chi2_val in zip(ci_levels, chi2_levels_1d):
+            ax.axhline(chi2_val, color="grey", linestyle="--", alpha=0.5, linewidth=1)
+            ax.text(
+                x_range[-1] - 0.05 * (x_range[-1] - x_range[0]),
+                chi2_val + 0.3,
+                f"{int(lvl * 100)}\\% CI",
+                color="grey",
+                ha="right",
+                fontsize=12,
+            )
+
+        ax.set_xlabel(PARAM2LABEL.get(param_names[col], param_names[col]))
+        ax.set_ylabel(r"$-2\log\Lambda$")
+        ax.set_xlim(x_range)
+        ax.set_ylim(0, max(chi2_levels_1d[-1] * 1.5, 5))
+
+    # --- Bottom row: confidence intervals beneath each marginal ---
+    n_models = len(llr_list)
+    row_height = 0.1
+    for col in range(N):
+        ax = fig.add_subplot(gs[3, col])
+        others = tuple(k for k in range(N) if k != col)
+        xi = grid_axes[col]
+
+        for m, (llr, color) in enumerate(zip(llr_list, colors)):
+            values_nd = -2 * llr.reshape(resolutions)
+            profile = _reduce_llr(values_nd, others, mode, resolutions, N)
+            profile = profile - profile.min()
+            theta_mle, intervals = _find_ci_intervals(xi, profile, levels=ci_levels)
+            y = (n_models - 1 - m) * row_height
+            ax.scatter(theta_mle, y, color=color)
+            for interval, style in zip(intervals.values(), ["solid", "dashed"]):
+                ax.hlines(y, interval[0], interval[1], linestyles=style, color=color)
+
+        ax.axvline(0, color="gray", linestyle="--", alpha=0.5)
+        ax.set_yticks([(n_models - 1) * row_height / 2])
+        ax.set_yticklabels([PARAM2LABEL.get(param_names[col], param_names[col])])
+        ax.tick_params(axis="y", length=0)
+        ax.set_xlim(*PARAM2LIMITXLIM.get(param_names[col], (-0.4, 0.4)))
+        ax.set_ylim(-0.1, (n_models - 1) * row_height + 0.1)
+        for spine in ("right", "top", "left"):
+            ax.spines[spine].set_visible(False)
+
+    fig.text(
+        1.0,
+        0.5,
+        r"$\sqrt{s}=13.6$ TeV~~$L=300\,\mathrm{fb}^{-1}$",
+        rotation=270,
+        ha="left",
+        va="center",
+        fontsize=22,
+    )
+
+    if to is not None:
+        fig.savefig(
+            Path(to).with_stem(f"{Path(to).stem}_" + "_".join(param_names)),
+            dpi=300,
+            bbox_inches="tight",
+        )
+    plt.close(fig)
+
+
 def _plot_llr_1d(
     *,
     llr_list: List[np.ndarray],
@@ -332,25 +552,9 @@ def _plot_llr_1d(
     method: Optional[str] = None,
 ) -> None:
     """
-    Plot 1 dimensional contours of the LLR
-
-    :param llr_list: Description
-    :type llr_list: List[np.ndarray]
-    :param std_list: Description
-    :type std_list: Optional[List[np.ndarray]]
-    :param grid: Description
-    :type grid: np.ndarray
-    :param param_name: Description
-    :type param_name: str
-    :param labels: Description
-    :type labels: List[str]
-    :param x_range: Description
-    :type x_range: Tuple[float, float]
-    :param colors: Description
-    :param linestyles: Description
-    :param to: Description
-    :param levels: Description
-    :param ylim: Description
+    Combined 1D figure: the marginal profile-likelihood curves (left) and the
+    corresponding confidence intervals per model (right), sharing a single
+    title and model legend.
     """
     assert len(llr_list) == len(labels), f"Number of LLR arrays and labels don't match"
 
@@ -361,75 +565,86 @@ def _plot_llr_1d(
         linestyles = ["-", "--", "-.", ":"] * ((len(llr_list) // 4) + 1)
 
     param_label = PARAM2LABEL.get(param_name, param_name)
-
-    fig, ax = plt.subplots()
-
-    # Allow for not plotting std of the LLR over runs
     std_list = std_list if std_list else [None] * len(llr_list)
 
-    # Plot the different LLR 1d contours
-    for llr, std, label, color, ls in zip(
-        llr_list, std_list, labels, colors, linestyles
-    ):
+    fig = plt.figure(figsize=(14, 6))
+    gs = GridSpec(2, 2, height_ratios=[1, 5], hspace=0.05, wspace=0.18)
+
+    # --- Shared header: title + model legend spanning both panels ---
+    ax_head = fig.add_subplot(gs[0, :])
+    ax_head.axis("off")
+    if method:
+        ax_head.set_title(method, fontsize=22, pad=8)
+
+    handles = [
+        mlines.Line2D([], [], color=c, linestyle=ls, linewidth=2, label=lab)
+        for c, ls, lab in zip(colors, linestyles, labels)
+    ]
+    ax_head.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=min(len(labels), 6),
+        frameon=False,
+        fontsize=18,
+        columnspacing=1.5,
+        handlelength=1.6,
+        handletextpad=0.5,
+    )
+
+    # --- Left panel: marginal profile-likelihood curves ---
+    ax_curve = fig.add_subplot(gs[1, 0])
+    for llr, std, color, ls in zip(llr_list, std_list, colors, linestyles):
         x = grid[:, 0]
         y = -2 * llr
-        ax.plot(x, y, color=color, linestyle=ls, linewidth=1.5, label=label)
+        ax_curve.plot(x, y, color=color, linestyle=ls, linewidth=1.5)
         if std is not None:
-            ax.fill_between(x, y + 2 * std, y - 2 * std, color=color, alpha=0.3)
+            ax_curve.fill_between(x, y + 2 * std, y - 2 * std, color=color, alpha=0.3)
 
-    # Plot horizontal lines for the different confidence levels
     for level in levels:
         value = stats.chi2.ppf(level, 1)
-        ax.hlines(
-            value,
-            *x_range,
-            colors="grey",
-            linestyles="--",
-            alpha=0.5,
-        )
-        ax.text(
+        ax_curve.hlines(value, *x_range, colors="grey", linestyles="--", alpha=0.5)
+        ax_curve.text(
             x=x_range[-1] - 0.33,
             y=value + 0.3,
             s=f"{int(level * 100)}\\% CI",
             color="grey",
         )
 
-    # Plot limits
-    ax.set_ylim(*ylim)
-    ax.set_xlim(x_range)
-
-    # Labels
-    ax.set_xlabel(param_label)
-    ax.set_ylabel(r"$-2\log\Lambda$")
+    ax_curve.set_ylim(*ylim)
+    ax_curve.set_xlim(x_range)
+    ax_curve.set_xlabel(param_label)
+    ax_curve.set_ylabel(r"$-2\log\Lambda$")
     _lumi_label = r"$\sqrt{s}=13.6$ TeV" + "\n" + r"$L=300~\mathrm{fb}^{-1}$"
-    ax.text(
-        0.9 * ax.get_xlim()[0],
-        0.8 * ax.get_ylim()[-1],
+    ax_curve.text(
+        0.9 * ax_curve.get_xlim()[0],
+        0.8 * ax_curve.get_ylim()[-1],
         _lumi_label,
         fontsize=18,
     )
 
-    legend_ncol = min(len(labels), 3)
-    legend_nrows = int(np.ceil(len(labels) / legend_ncol))
+    # --- Right panel: confidence intervals per model ---
+    ax_int = fig.add_subplot(gs[1, 1])
+    n_models = len(llr_list)
+    row_height = 0.1
+    for m, (llr, color) in enumerate(zip(llr_list, colors)):
+        profile = -2 * llr
+        profile = profile - profile.min()
+        theta_mle, intervals = _find_ci_intervals(grid[:, 0], profile, levels=levels)
+        y = (n_models - 1 - m) * row_height
 
-    # Reserve just enough room above the axes for the legend (≈0.06 fig units / row)
-    legend_height = 0.06 * legend_nrows
-    legend_top = 1.0 - 0.01
-    axes_top = legend_top - legend_height
+        ax_int.scatter(theta_mle, y, color=color)
+        for interval, style in zip(intervals.values(), ["solid", "dashed"]):
+            ax_int.hlines(y, interval[0], interval[1], linestyles=style, color=color)
 
-    if method:
-        fig.suptitle(method, fontsize=18, y=1.02)
-        fig.tight_layout(rect=[0, 0, 1, axes_top - 0.03])
-    else:
-        fig.tight_layout(rect=[0, 0, 1, axes_top])
-
-    fig.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, legend_top),
-        ncol=legend_ncol,
-        frameon=False,
-        fontsize=20,
-    )
+    ax_int.axvline(0, color="gray", linestyle="--", alpha=0.5)
+    ax_int.set_yticks([(n_models - 1) * row_height / 2])
+    ax_int.set_yticklabels([param_label])
+    ax_int.tick_params(axis="y", length=0)
+    ax_int.set_xlim(-0.2, 0.2)
+    ax_int.set_ylim(-0.1, (n_models - 1) * row_height + 0.1)
+    for spine in ("right", "top", "left"):
+        ax_int.spines[spine].set_visible(False)
 
     if to is not None:
         fig.savefig(
@@ -439,7 +654,7 @@ def _plot_llr_1d(
         )
     plt.close(fig)
 
-    return fig, ax
+    return fig, (ax_curve, ax_int)
 
 
 def plot_ratio_calibration(
@@ -585,54 +800,128 @@ def plot_learning_curves(losses, to=None):
     return fig, ax
 
 
-def plot_intervals(llr_list, grid, labels, to, colors, method=None):
-    fig = plt.figure(figsize=(8, 8))
-    gs = GridSpec(2, 1, height_ratios=[1, 3], hspace=0.3)
+def plot_intervals(
+    llr_list,
+    grid,
+    labels,
+    to,
+    colors,
+    resolutions=None,
+    param_names=None,
+    mode: Literal["average", "slice", "mle"] = "average",
+    method=None,
+):
+    # For an N-dimensional scan the LLR is reduced over the other coefficients
+    # to obtain a 1D profile per coefficient, and each coefficient gets its own
+    # block of model rows. `mode` must match what `plot_llr`/`_plot_marginals`
+    # use so the intervals line up with the marginal curves. The 1D case falls
+    # out as N == 1.
+    N = grid.shape[1]
+    if resolutions is None:
+        resolutions = [grid.shape[0]]
+    if param_names is None:
+        param_names = [f"param_{i}" for i in range(N)]
+
+    grid_axes = [np.unique(grid[:, d]) for d in range(N)]
+
+    fig = plt.figure(figsize=(8, 7))
+    gs = GridSpec(2, 1, height_ratios=[1, 4], hspace=0.05)
 
     ax_top = fig.add_subplot(gs[0])
     ax_top.axis("off")
 
-    ax_top.text(
-        0.02,
-        0.40,
-        r"$\sqrt{s} = 13.6$ TeV",
-        fontsize=25,
-        transform=ax_top.transAxes,
-    )
-    ax_top.text(
-        0.02,
-        0.08,
-        r"$L=300~\mathrm{fb}^{-1}$",
-        fontsize=25,
-        transform=ax_top.transAxes,
-    )
+    if method:
+        ax_top.set_title(method, fontsize=22, pad=8)
 
     handles = [Line2D([0], [0], color=c, lw=3) for c in colors]
 
-    ax_top.legend(handles, labels, loc="upper right", frameon=False, fontsize=25)
-
-    if method:
-        ax_top.text(
-            0.50, 0.85, method,
-            fontsize=20, ha="center", transform=ax_top.transAxes,
-        )
+    # Lay the model labels out in a horizontal grid (multiple columns) so a
+    # large ensemble doesn't stack into one tall column that overflows the
+    # short header panel and gets clipped. Anchored to the bottom of the header
+    # strip so it sits just above the plot; the lumi / CoM-energy annotation
+    # lives inside the main axes.
+    legend_ncol = min(len(labels), 3)
+    ax_top.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=legend_ncol,
+        frameon=False,
+        fontsize=18,
+        columnspacing=1.5,
+        handlelength=1.6,
+        handletextpad=0.5,
+    )
 
     ax = fig.add_subplot(gs[1])
 
-    for i, (llr, color) in enumerate(zip(llr_list[::-1], colors[::-1])):
-        theta_mle, intervals = _find_ci_intervals(grid[:, 0], -2 * llr)
-        y = 0.1 * i
+    n_models = len(llr_list)
+    row_height = 0.1
+    block_height = n_models * row_height
+    block_gap = 0.12
+    block_pitch = block_height + block_gap
 
-        ax.scatter(theta_mle, y, color=color)
-        for interval, style in zip(intervals.values(), ["solid", "dashed"]):
-            ax.hlines(y, interval[0], interval[1], linestyles=style, color=color)
+    yticks = []
+    yticklabels = []
+
+    for p in range(N):
+        others = tuple(k for k in range(N) if k != p)
+        xi = grid_axes[p]
+
+        # Coefficients run top-to-bottom; within a block, models run top-to-bottom
+        # in the same order as the legend.
+        block_base = (N - 1 - p) * block_pitch
+
+        for m, (llr, color) in enumerate(zip(llr_list, colors)):
+            values_nd = (-2 * llr).reshape(resolutions)
+
+            # Reduce over the other coefficients exactly as the marginals plot
+            # does, so the intervals match the marginal curves.
+            if mode == "mle":
+                profile = values_nd.min(axis=others)
+            elif mode == "average":
+                profile = values_nd.mean(axis=others)
+            elif mode == "slice":
+                slicer = [
+                    resolutions[k] // 2 if k in others else slice(None)
+                    for k in range(N)
+                ]
+                profile = values_nd[tuple(slicer)]
+            else:
+                raise ValueError("mode must be 'average', 'slice', or 'mle'")
+
+            profile = profile - profile.min()
+
+            theta_mle, intervals = _find_ci_intervals(xi, profile)
+            y = block_base + (n_models - 1 - m) * row_height
+
+            ax.scatter(theta_mle, y, color=color)
+            for interval, style in zip(intervals.values(), ["solid", "dashed"]):
+                ax.hlines(y, interval[0], interval[1], linestyles=style, color=color)
+
+        yticks.append(block_base + (n_models - 1) * row_height / 2)
+        yticklabels.append(PARAM2LABEL.get(param_names[p], param_names[p]))
 
     ax.axvline(0, color="gray", linestyle="--", alpha=0.5)
 
-    ax.set_yticks([0.2])
-    ax.set_yticklabels([r"$c_{H t}$"])
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticklabels)
     ax.tick_params(axis="y", length=0)
-    ax.set_xlim(-0.5, 0.5)
+
+    xmin, xmax = -0.4, 0.4
+    ax.set_xlim(xmin, xmax)
+    # Reserve headroom above the topmost block for the lumi annotation so it
+    # doesn't overlap the interval lines.
+    top_y = (N - 1) * block_pitch + (n_models - 1) * row_height
+    ax.set_ylim(-0.1, top_y + 0.45)
+
+    ax.text(
+        xmin + 0.02 * (xmax - xmin),
+        top_y + 0.40,
+        r"$\sqrt{s} = 13.6$ TeV" + "\n" + r"$L=300~\mathrm{fb}^{-1}$",
+        fontsize=18,
+        va="top",
+    )
 
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
