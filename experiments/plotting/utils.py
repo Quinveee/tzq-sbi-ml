@@ -399,16 +399,12 @@ def _plot_llr_combined_3d(
     grid_axes = [np.unique(grid[:, d]) for d in range(N)]
 
     fig = plt.figure(figsize=(16, 16))
-    gs = GridSpec(
-        4,
-        len(pairs),
-        height_ratios=[1.3, 4, 4, 2.2],
-        hspace=0.45,
-        wspace=0.25,
-    )
+    # A small outer gap puts the header right above the plots; the plot rows
+    # keep their own (larger) spacing via the inner grid.
+    outer = fig.add_gridspec(2, 1, height_ratios=[1.2, 10.2], hspace=0.05)
 
     # --- Shared header: title + model legend ---
-    ax_head = fig.add_subplot(gs[0, :])
+    ax_head = fig.add_subplot(outer[0])
     ax_head.axis("off")
     if method:
         ax_head.set_title(method, fontsize=30, pad=14)
@@ -429,9 +425,17 @@ def _plot_llr_combined_3d(
         handletextpad=0.5,
     )
 
+    gs = outer[1].subgridspec(
+        3,
+        len(pairs),
+        height_ratios=[4, 4, 2.2],
+        hspace=0.45,
+        wspace=0.25,
+    )
+
     # --- Top row: 2D contour projections ---
     for col, (i, j) in enumerate(pairs):
-        ax = fig.add_subplot(gs[1, col])
+        ax = fig.add_subplot(gs[0, col])
         others = [k for k in range(N) if k not in (i, j)]
         xi = grid_axes[i]
         yj = grid_axes[j]
@@ -463,7 +467,7 @@ def _plot_llr_combined_3d(
 
     # --- Middle row: marginal profile-likelihood curves ---
     for col in range(N):
-        ax = fig.add_subplot(gs[2, col])
+        ax = fig.add_subplot(gs[1, col])
         others = tuple(k for k in range(N) if k != col)
         xi = grid_axes[col]
         x_range = ranges[col]
@@ -494,7 +498,7 @@ def _plot_llr_combined_3d(
     n_models = len(llr_list)
     row_height = 0.1
     for col in range(N):
-        ax = fig.add_subplot(gs[3, col])
+        ax = fig.add_subplot(gs[2, col])
         others = tuple(k for k in range(N) if k != col)
         xi = grid_axes[col]
 

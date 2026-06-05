@@ -25,12 +25,16 @@ class AsymptoticLimitsHistos(AsymptoticLimits):
     def log_r_kin(
         self,
         *,
-        predictions: List[np.ndarray],
+        predictions,
         theta_grid: np.ndarray,
         histos: List[Histo],
         **kwds,
     ) -> np.ndarray:
+        # ``predictions`` is the per-event summary statistic on the asimov
+        # events: shape (n_events, dim). Accept either the bare array or the
+        # legacy single-element list wrapper.
+        summary = predictions[-1] if isinstance(predictions, list) else predictions
         log_r_kin, *_ = _AsymptoticLimits._calculate_log_likelihood_histo(
-            summary_stats=predictions.pop(), theta_grid=theta_grid, histos=histos
+            summary_stats=summary, theta_grid=theta_grid, histos=histos
         )
         return log_r_kin

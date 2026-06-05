@@ -1,14 +1,19 @@
 test_split: 0.3 # histo templates are built from the (1 - test_split) "train" partition; test_split must be in (0, 1)
 luminosity: 300000 # for llr rate
-n_toys: 500000
+n_toys: 50000
 theta_ranges: ???
 resolutions: ???
+
+# Ratio estimator: use the learned log-ratio as a histogram summary statistic
+# (robust) instead of direct per-event summation (calibration-fragile). Set
+# false to recover the old direct-summation path for comparison.
+ratio_histo: true
+ratio_summary_scale: 1.0 # |theta| of the per-direction reference points
 
 asimov: 
   theta_true: ???
   sample_only_from_closest_benchmark: true
-  n_asimov_ratio: 500000 # NOTE: madminer will sample a different Asimov if this is not `null` (set seed)
-  n_asimov_score: 500000
+  n_asimov: 50000 # NOTE: madminer will sample a different Asimov if this is not `null` (set seed)
 
 # Only used when `experiment=histos`
 hist_vars: ["pt_j1", "pt_l1"]

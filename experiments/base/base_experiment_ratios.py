@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.autograd import grad
 
-from ..limits import AsymptoticLimitsRatios
+from ..limits import AsymptoticLimitsRatios, AsymptoticLimitsRatiosHistos
 from ..plotting import plot_ratio_calibration
 from .base_experiment_ml import BaseExperimentML
 from .schemas import (
@@ -33,7 +33,36 @@ class BaseExperimentRatios(BaseExperimentML):
         self._val_log_r: list[torch.Tensor] = []
         self._val_y: list[torch.Tensor] = []
 
+        # Default to the robust histogram-of-ratio estimator; the
+        # calibration-fragile direct-summation path stays available via
+        # `limits.ratio_histo=false` for side-by-side comparison.
+        if bool(self.cfg.limits.get("ratio_histo", True)):
+            self.asymptotics_cls = AsymptoticLimitsRatiosHistos
+
     def _preds(self, *args, **kwargs) -> ...: ...
+
+    def _summary_reference_points(self) -> np.ndarray:
+        """Reference EFT points at which the learned ratio is evaluated to
+        form the histogram summary statistic. One unit point per direction so
+        the summary has the same dimensionality as the score (``dim_theta``),
+        giving an identical-shaped histogram. ``|theta|`` is set by
+        ``limits.ratio_summary_scale``.
+        """
+        dim = int(self.cfg.dataset.theta_dim)
+        scale = float(self.cfg.limits.get("ratio_summary_scale", 1.0))
+        return np.eye(dim, dtype=np.float64) * scale
+
+    def _histo_summary_stats(self, x: np.ndarray) -> np.ndarray:
+        """Stack ``log r̂(x | theta_ref_k, SM)`` over the reference points into
+        a ``(n_events, dim_theta)`` summary statistic. ``x`` is raw;
+        ``create_lims_loaders`` normalizes and sets the per-point theta.
+        """
+        refs = self._summary_reference_points()
+        loaders = self.create_lims_loaders(x=x, theta=refs)
+        cols = [
+            np.asarray(self.eval(ldr)).reshape(len(x), -1)[:, 0] for ldr in loaders
+        ]
+        return np.stack(cols, axis=1)  # (n_events, n_refs == dim_theta)
 
     def _val_extra_init(self) -> None:
         self._val_log_r = []

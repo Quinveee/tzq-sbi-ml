@@ -14,7 +14,8 @@ scripts/asimov_sanity.py
 scripts/ratio_bias_check.py
 scripts/ratio_bias_check.sbatch
 wandb/
-
+\diag_ratio_bg.py
+\model_hyperparameters.tex
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

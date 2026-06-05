@@ -1,2 +1,2 @@
 from .asymptotic_limits_histos import AsymptoticLimitsHistos
-from .asymptotic_limits_ratios import AsymptoticLimitsRatios
+from .asymptotic_limits_ratios import AsymptoticLimitsRatios, AsymptoticLimitsRatiosHistos

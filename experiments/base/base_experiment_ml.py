@@ -684,23 +684,12 @@ class BaseExperimentML(BaseExperiment):
             if self._seed is not None:
                 np.random.seed(self._seed)
 
-            # Sample weighted events from partition dataset
-            # `cfg.limits.test_split` defines where the test partition starts
-            if self.cfg.exp.key == "ratio":
-                x_test, weights_test = alims.asimov_data(
-                    self.cfg.limits.asimov.theta_true,
-                    self.cfg.limits.asimov.sample_only_from_closest_benchmark,
-                    self.cfg.limits.test_split,
-                    self.cfg.limits.asimov.n_asimov_ratio,
-                )
-
-            if self.cfg.exp.key == "score":
-                x_test, weights_test, _ = alims.asimov_data(
-                    self.cfg.limits.asimov.theta_true,
-                    self.cfg.limits.asimov.sample_only_from_closest_benchmark,
-                    self.cfg.limits.test_split,
-                    self.cfg.limits.asimov.n_asimov_score,
-                )
+            x_test, weights_test = alims.asimov_data(
+                self.cfg.limits.asimov.theta_true,
+                self.cfg.limits.asimov.sample_only_from_closest_benchmark,
+                self.cfg.limits.test_split,
+                self.cfg.limits.asimov.n_asimov,
+            )
 
             # Expected number of events (for *rate* llr estimation)
             n_events = (
@@ -715,8 +704,11 @@ class BaseExperimentML(BaseExperiment):
 
             LOGGER.info("Evaluating test data ...")
             if self.asymptotics_cls.NEEDS_HISTOS:
-                test_loaders = self.create_lims_loaders(x=x_test, theta=None)
-                preds = [self.eval(tl) for tl in test_loaders]
+                # Per-event summary statistic on the asimov events. For score
+                # regressors this is the predicted score; for ratio regressors
+                # in histogram mode it is log r̂ at reference points (see the
+                # ``_histo_summary_stats`` override). Returns (n_events, dim).
+                preds = self._histo_summary_stats(x_test)
             else:
                 preds = self.eval_grid(x_test, theta_grid)
 
@@ -761,18 +753,13 @@ class BaseExperimentML(BaseExperiment):
                     else None
                 ),
             )
-            x_histo = self.normalizer.transform(x_histo)
             LOGGER.info(f"Sampled {len(x_histo)} histo events")
-            histo_dataset = self.dataset_cls(
-                x=x_histo,
-                theta=theta_grid,
-                met=getattr(self, "_use_met", False),
-            )
-            histo_loader = DataLoader(
-                histo_dataset, batch_size=128, collate_fn=self.collate_fn
-            )
             LOGGER.info("Evaluating histo data for histogram creation ...")
-            preds_histo = self.eval(histo_loader)
+            # Same per-event summary statistic as the asimov, evaluated on the
+            # template events (raw x; normalization happens inside). The morphed
+            # ``weights_histo`` (shape n_toys x n_thetas) supply the theta
+            # dependence of the templates.
+            preds_histo = self._histo_summary_stats(x_histo)
             histos = alims.histos(preds_histo, weights_histo)
 
         return alims.limits(
@@ -784,6 +771,24 @@ class BaseExperimentML(BaseExperiment):
             test_split=self.cfg.limits.test_split,
             histos=histos,
         )
+
+    def _histo_summary_stats(self, x: np.ndarray) -> np.ndarray:
+        """Per-event summary statistic for histogram-based limits.
+
+        Default (score regressors): the predicted score ``t̂(x)``, a
+        theta-independent ``dim_theta``-vector. ``x`` is raw (un-normalized);
+        ``create_lims_loaders`` applies the normalizer.
+
+        Ratio regressors override this to stack ``log r̂(x|theta_ref_k, SM)``
+        over a set of reference points, so the learned ratio is used as a
+        summary statistic (robust) rather than summed per-event (fragile).
+
+        :return: array of shape ``(n_events, dim)``
+        """
+        loaders = self.create_lims_loaders(x=x, theta=None)
+        cols = [np.asarray(self.eval(ldr)) for ldr in loaders]
+        out = np.concatenate(cols, axis=0) if len(cols) > 1 else cols[0]
+        return out
 
     def create_lims_loaders(self, x, theta=None):
         """
