@@ -1,12 +1,12 @@
 \begin{tabular}{lccc}
 \toprule
-Model & $\rho(\log r)$ & MSE & MLE bias \\
+Model & $\rho(\log r)$ & MSE & $\hat{\theta}_{c_{Ht}} - \theta^{\rm true}$ \\
 \midrule
-2D Histogram & — & — & $0.039 \pm 0.020$ \\
-MLP & $0.320 \pm 0.005$ & $0.007 \pm 0.000$ & $0.032 \pm 0.000$ \\
-Transformer & $0.272 \pm 0.007$ & $0.007 \pm 0.000$ & $0.032 \pm 0.000$ \\
-Transformer (LLoCa) & $0.325 \pm 0.002$ & $0.007 \pm 0.000$ & $0.032 \pm 0.000$ \\
-LGATr & $0.257 \pm 0.004$ & $0.007 \pm 0.000$ & $0.032 \pm 0.000$ \\
-LorentzNet & $0.298 \pm 0.001$ & $0.007 \pm 0.000$ & $0.032 \pm 0.000$ \\
+2D Histogram & — & — & $-0.046 \pm 0.020$ \\
+MLP & $0.320 \pm 0.005$ & $0.007 \pm 0.000$ & $+0.026 \pm 0.001$ \\
+Transformer & $0.272 \pm 0.007$ & $0.007 \pm 0.000$ & $+0.024 \pm 0.002$ \\
+Transformer (LLoCa) & $0.325 \pm 0.002$ & $0.007 \pm 0.000$ & $+0.023 \pm 0.000$ \\
+LGATr & $0.257 \pm 0.004$ & $0.007 \pm 0.000$ & $+0.023 \pm 0.001$ \\
+LorentzNet & $0.298 \pm 0.001$ & $0.007 \pm 0.000$ & $+0.021 \pm 0.000$ \\
 \bottomrule
 \end{tabular}

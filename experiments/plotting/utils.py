@@ -21,7 +21,7 @@ PARAM2LABEL = {"cHt": r"$c_{Ht}$", "ctWRe": r"$c_{tW}$", "ctBRe": r"$c_{tB}$"}
 
 # Per-coefficient x-range for the limits panels (falls back to ±0.4)
 PARAM2LIMITXLIM = {
-    "cHt": (-0.2, 0.2),
+    "cHt": (-0.5, 0.5),
     "ctWRe": (-0.7, 0.7),
     "ctBRe": (-1, 1),
 }

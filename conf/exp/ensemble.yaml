@@ -15,7 +15,7 @@ processed: false
 # ρ(logr_true, logr_pred) for ratio regression, reported as mean ± std over the
 # seeds, alongside MSE and MLE bias. Heavier than the LLR pass (re-runs model
 # inference), so disable for quick LLR-only runs.
-correlations: true
+correlations: false
 
 checkpoints_from:
   exp: ["histo", "ratio", "ratio", "ratio", "ratio", "ratio"]
