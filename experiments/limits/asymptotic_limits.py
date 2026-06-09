@@ -32,11 +32,16 @@ class AsymptoticLimits(DataAnalyzer, ABC):
         super().__init__(h5_filename, False, False)
 
     def asimov_data(
-        self, theta, sample_only_from_closest_benchmark, test_split, n_asimov
+        self,
+        theta,
+        sample_only_from_closest_benchmark,
+        test_split,
+        n_asimov,
+        partition: Literal["train", "test", "all"] = "test",
     ):
         x, weights_benchmarks, correction_factor = self.weighted_events_from_partition(
             n_draws=n_asimov,
-            partition="test",
+            partition=partition,
             test_split=test_split,
             thetas=None,
             generated_close_to=theta if sample_only_from_closest_benchmark else None,
@@ -60,12 +65,23 @@ class AsymptoticLimits(DataAnalyzer, ABC):
         """Returns all events with benchmark weights for partition plus correction
         factor. Only train or test available"""
 
-        assert partition in ("train", "test"), f"Invalid partition key: {partition}"
+        assert partition in (
+            "train",
+            "test",
+            "all",
+        ), f"Invalid partition key: {partition}"
 
         # Weighted histo data
-        start_event, end_envent, cf = self._calculate_partition_bounds(
-            partition, test_split, 0.0
-        )
+        if partition == "all":
+            # Entire dataset (train + test). Used by the histogram baseline,
+            # which has no trained model and so cannot overfit the events it
+            # also reuses as Asimov data; this gives it the same total MC budget
+            # the neural pipeline gets (train for the network + test for Asimov).
+            start_event, end_envent, cf = 0, None, 1.0
+        else:
+            start_event, end_envent, cf = self._calculate_partition_bounds(
+                partition, test_split, 0.0
+            )
 
         x, weights_benchmarks = self.weighted_events(
             start_event=start_event,
@@ -80,11 +96,11 @@ class AsymptoticLimits(DataAnalyzer, ABC):
         weights = np.asarray(self._weights(thetas, None, weights_benchmarks))
         return x, weights, cf
 
-    def calculate_xsecs(self, thetas, test_split):
+    def calculate_xsecs(self, thetas, test_split, partition="test"):
 
         # Total xsecs for benchmarks
         _, weights, correction_factor = self.weighted_events_from_partition(
-            n_draws=None, partition="test", test_split=test_split
+            n_draws=None, partition=partition, test_split=test_split
         )
         xsecs_benchmarks = np.sum(weights, axis=0)
 
@@ -96,11 +112,12 @@ class AsymptoticLimits(DataAnalyzer, ABC):
         return np.asarray(xsecs)
 
     def calculate_log_likelihood_xsec(
-        self, n_events, theta_grid, luminosity, test_split
+        self, n_events, theta_grid, luminosity, test_split, partition="test"
     ):
         n_events_rounded = int(np.round(n_events, 0))
         n_predicted = (
-            self.calculate_xsecs(theta_grid, test_split=test_split) * luminosity
+            self.calculate_xsecs(theta_grid, test_split=test_split, partition=partition)
+            * luminosity
         )
         log_p = poisson.logpmf(k=n_events_rounded, mu=n_predicted)
         return log_p
@@ -131,6 +148,7 @@ class AsymptoticLimits(DataAnalyzer, ABC):
         luminosity,
         test_split,
         histos=None,
+        partition="test",
     ):
         x_weights /= np.sum(x_weights)
         x_weights.astype(np.float64)
@@ -151,7 +169,7 @@ class AsymptoticLimits(DataAnalyzer, ABC):
 
         # Include xsecs
         log_p_xsec = self.calculate_log_likelihood_xsec(
-            n_events, theta_grid, luminosity, test_split=test_split
+            n_events, theta_grid, luminosity, test_split=test_split, partition=partition
         )
 
         # Combine and get p-values

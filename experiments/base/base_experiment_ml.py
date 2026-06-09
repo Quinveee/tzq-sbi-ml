@@ -792,9 +792,20 @@ class BaseExperimentML(BaseExperiment):
 
     def create_lims_loaders(self, x, theta=None):
         """
-        Method to create torch loaders when using Asimov
+        Method to create torch loaders when using Asimov.
+
+        Uses the (large) eval batch size and background workers so the GPU is
+        kept busy during limit evaluation — a small batch size here starves the
+        GPU (low utilization can trip cluster watchdogs that hold underused
+        jobs). Attention models cap the batch via ``model.eval_batch_size``.
         """
-        factory_kwds = {"batch_size": 128, "collate_fn": self.collate_fn}
+        factory_kwds = {
+            "batch_size": self._eval_batch_size(default=4096),
+            "collate_fn": self.collate_fn,
+            "pin_memory": self.cfg.devices.pin_memory,
+            "num_workers": 4,
+            "prefetch_factor": 2,
+        }
         assert self.dataset_cls is not None and self.normalizer is not None
         x = self.normalizer.transform(x)
         ds_kwds = {"met": getattr(self, "_use_met", False)}
