@@ -2,9 +2,11 @@
 
 | Model | log r corr. | MSE | bias(c_Ht) | bias(c_tW) | bias(c_tB) |
 | --- | --- | --- | --- | --- | --- |
-| 2D Histogram | — | — | -0.525±0.336 | +1.000±0.000 | +1.000±0.000 |
-| MLP | 0.254±0.004 | 0.008±0.000 | -0.005±0.003 | +0.091±0.257 | -0.333±0.943 |
-| Transformer | 0.220±0.010 | 0.007±0.000 | -0.009±0.067 | -0.242±0.187 | +0.697±0.429 |
-| Transformer (LLoCa) | 0.013±0.010 | 0.017±0.007 | -0.327±0.223 | -0.242±0.886 | -1.000±0.000 |
-| LGATr | 0.215±0.008 | 0.007±0.000 | -0.160±0.105 | -0.364±0.708 | +0.818±0.148 |
-| LorentzNet | 0.273±0.002 | 0.007±0.000 | +0.027±0.033 | -0.121±0.113 | +0.636±0.393 |
+| 2D Histogram | — | — | -0.195±0.018 | +0.010±0.009 | +0.082±0.010 |
+| MLP | 0.254±0.004 | 0.008±0.000 | +0.002±0.003 | +0.031±0.003 | +0.076±0.006 |
+| Transformer | 0.220±0.010 | 0.007±0.000 | -0.011±0.017 | +0.019±0.009 | +0.027±0.004 |
+| Transformer (LLoCa) | 0.287±0.003 | 0.007±0.000 | -0.029±0.007 | +0.008±0.013 | +0.051±0.009 |
+| LGATr | 0.215±0.008 | 0.007±0.000 | -0.052±0.007 | +0.005±0.007 | +0.038±0.005 |
+| LorentzNet | 0.273±0.002 | 0.007±0.000 | -0.009±0.008 | +0.029±0.006 | +0.022±0.009 |
+
+_MLE bias = θ̂ − θ_true, where θ̂ is the minimum of each coefficient's averaged 1D marginal of the seed-averaged LLR (the same marginal the plots show), parabola-refined sub-grid; ± is the per-seed spread. `unconstr.` marks coefficients whose 68% marginal reaches the grid edge — the data does not bound them within the scan range._

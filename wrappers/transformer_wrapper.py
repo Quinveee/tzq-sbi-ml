@@ -48,6 +48,14 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         lloca_frames = lloca_config.get("LLoCa_frames", None)
         lloca_num_scalars = lloca_config.get("LLoCa_num_scalars", None)
         lloca_num_vectors = lloca_config.get("LLoCa_num_vectors", None)
+        # When false, θ is not routed into the learnable frame predictor, so the
+        # local Lorentz frames depend only on the particle four-momenta. θ still
+        # conditions the network through the input channels. Useful to stabilize
+        # higher-dimensional θ (e.g. 3d ratio). Defaults to True (legacy
+        # behaviour: frames are θ-dependent).
+        lloca_frame_use_theta = bool(
+            lloca_config.get("LLoCa_frame_use_theta", True)
+        )
         lloca_frame_hidden = int(lloca_config.get("LLoCa_frame_hidden", 128))
         lloca_frame_layers = int(lloca_config.get("LLoCa_frame_layers", 2))
         lloca_eps = float(lloca_config.get("LLoCa_eps", 1e-8))
@@ -71,6 +79,7 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         self.lloca_frames = lloca_frames
         self.lloca_num_scalars = lloca_num_scalars
         self.lloca_num_vectors = lloca_num_vectors
+        self.lloca_frame_use_theta = lloca_frame_use_theta
         self.lloca_frame_hidden = lloca_frame_hidden
         self.lloca_frame_layers = lloca_frame_layers
         self.lloca_eps = lloca_eps
@@ -161,8 +170,10 @@ class BaseTransformerWrapper(BaseWrapper, ABC):
         n_events: int,
         embedding_kwargs: dict,
     ) -> torch.Tensor | None:
-        candidates = [
-            embedding_kwargs.get("theta", None),
+        candidates = []
+        if getattr(self, "lloca_frame_use_theta", True):
+            candidates.append(embedding_kwargs.get("theta", None))
+        candidates += [
             embedding_kwargs.get("preprocessed", None),
             embedding_kwargs.get("met", None),
         ]

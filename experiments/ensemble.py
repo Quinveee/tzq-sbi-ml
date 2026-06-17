@@ -369,66 +369,107 @@ class Ensemble:
         return {"kind": "score", "rho": rhos, "mse": mse}
 
     def _mle_bias_from_limits(self, limits) -> np.ndarray:
-        """Signed per-coefficient MLE bias ``θ̂ - θ_true``.
+        """Signed per-coefficient MLE bias ``θ̂ - θ_true`` (one value per coeff).
 
-        Returns one value per Wilson coefficient (sign retained, so over- vs
-        under-estimation is visible) rather than a single distance. The estimate
-        ``θ̂`` is refined below the grid spacing by a parabolic fit (see
-        :meth:`_interpolated_theta_hat`), because the raw grid argmax quantizes
-        the MLE to the nearest node and can collapse genuinely different models
-        onto the same value. ``θ_true`` is the Asimov truth from the config.
-        Works for any method that stores ``limits``.
+        ``θ̂`` is read off the *marginalised* 1D likelihood per coefficient — the
+        same reduction the contour/marginal plots use (see
+        :meth:`_marginal_mle`) — so the table agrees with the plots. ``θ_true``
+        is the Asimov truth from the config.
         """
         theta_true = np.asarray(self.cfg.limits.asimov.theta_true, dtype=float)
         if limits is None:
             return np.full(theta_true.shape, np.nan)
-        return self._interpolated_theta_hat(limits) - theta_true
+        theta_hat, _ = self._marginal_mle(limits.grid, limits.llr, limits.resolutions)
+        return theta_hat - theta_true
 
     @staticmethod
-    def _interpolated_theta_hat(limits) -> np.ndarray:
-        """Sub-grid MLE via a 1D parabolic fit along each coefficient axis.
+    def _marginal_mle(grid, llr, resolutions, dchi2: float = 1.0):
+        """Per-coefficient MLE and constraint flag from the averaged marginal.
 
-        The asymptotic scan stores the test statistic on a regular θ lattice;
-        its argmin is the grid node ``θ̂_grid``. For each axis we fit a parabola
-        to ``-2lnL`` at that node and its two neighbours along the axis (holding
-        the other coefficients at the node) and take the vertex. The offset is
-        clamped to the bracketing cell. We fall back to the grid node for that
-        axis at a grid boundary or when the local curvature is non-convex
-        (vertex not a minimum), so the result is never worse than the argmax.
+        The ensemble plots reduce the N-D ``-2lnL`` to a 1D curve per coefficient
+        by **averaging** over the other coefficients (``mode="average"`` in
+        :func:`plot_llr` / ``_reduce_llr``), then read the minimum. We replicate
+        exactly that reduction here so the tabulated MLE bias and the plotted
+        marginal coincide — rather than the global argmin / profile, which rails
+        to grid corners on flat directions even when the marginal is a clean
+        parabola at zero.
+
+        For each coefficient the marginal minimum is refined sub-grid by a
+        parabolic fit (clamped to the bracketing cell; grid node kept at a
+        boundary or non-convex point). The constraint flag is ``True`` when the
+        marginal's Δχ² < ``dchi2`` (≈1σ) region reaches the grid edge.
+
+        :return: ``(theta_hat, unconstrained)`` arrays of length ``d``.
         """
-        grid = np.asarray(limits.grid, dtype=float)        # (N, d)
-        twonll = -2.0 * np.asarray(limits.llr, dtype=float)  # (N,), min at MLE
-        theta_hat = grid[int(limits.mle)].astype(float).copy()
+        grid = np.asarray(grid, dtype=float)
+        res = [int(r) for r in resolutions]
+        d = grid.shape[1]
+        values_nd = (-2.0 * np.asarray(llr, dtype=float)).reshape(res)
 
-        for a in range(grid.shape[1]):
-            axis_vals = np.unique(grid[:, a])
-            ja = int(np.argmin(np.abs(axis_vals - theta_hat[a])))
-            if ja == 0 or ja == axis_vals.size - 1:
-                continue  # boundary node: keep grid value
+        theta_hat = np.empty(d, dtype=float)
+        unconstrained = np.empty(d, dtype=bool)
+        for a in range(d):
+            others = tuple(k for k in range(d) if k != a)
+            marg = values_nd.mean(axis=others) if others else values_nd.copy()
+            marg = marg - marg.min()
+            vals = np.unique(grid[:, a])
 
-            # Rows sharing the node's coordinates on every *other* axis.
-            line = np.ones(grid.shape[0], dtype=bool)
-            for b in range(grid.shape[1]):
-                if b != a:
-                    line &= np.isclose(grid[:, b], theta_hat[b])
+            i = int(np.argmin(marg))
+            theta_hat[a] = vals[i]
+            if 0 < i < vals.size - 1:
+                y1, y2, y3 = marg[i - 1], marg[i], marg[i + 1]
+                curv = y1 - 2.0 * y2 + y3
+                if curv > 0.0:
+                    h = float(vals[i + 1] - vals[i])  # uniform per axis
+                    delta = float(np.clip(0.5 * h * (y1 - y3) / curv, -h, h))
+                    theta_hat[a] = vals[i] + delta
 
-            def value_at(axis_value):
-                rows = np.nonzero(line & np.isclose(grid[:, a], axis_value))[0]
-                return twonll[rows[0]] if rows.size else None
+            region = vals[marg < dchi2]
+            unconstrained[a] = (
+                region.size == 0
+                or np.isclose(region.min(), vals.min())
+                or np.isclose(region.max(), vals.max())
+            )
+        return theta_hat, unconstrained
 
-            y1, y2, y3 = (value_at(axis_vals[ja + k]) for k in (-1, 0, 1))
-            if y1 is None or y3 is None:
-                continue
-            curv = y1 - 2.0 * y2 + y3
-            if curv <= 0.0:  # flat / non-convex → not a usable minimum
-                continue
+    def _mle_bias_aggregate(self, limits_list):
+        """Aggregate the MLE bias across seeds, consistent with the LLR plots.
 
-            h = float(axis_vals[ja + 1] - axis_vals[ja])  # uniform per axis
-            delta = 0.5 * h * (y1 - y3) / curv
-            delta = float(np.clip(delta, -h, h))           # stay in the cell
-            theta_hat[a] = axis_vals[ja] + delta
+        Returns ``(central, std, unconstrained)`` per coefficient. The central
+        value and constraint flag come from the *seed-averaged* LLR surface,
+        reduced to per-coefficient marginals exactly as the plots do (see
+        :meth:`_marginal_mle`) — so the table and plots agree. ``std`` is the
+        per-seed spread of the marginal MLEs (a stability indicator).
+        """
+        theta_true = np.asarray(self.cfg.limits.asimov.theta_true, dtype=float)
+        valid = [L for L in limits_list if L is not None]
+        if not valid:
+            nan = np.full(theta_true.shape, np.nan)
+            return nan, nan, np.zeros(theta_true.shape, dtype=bool)
 
-        return theta_hat
+        per_seed = np.asarray(
+            [self._mle_bias_from_limits(L) for L in valid], dtype=float
+        )
+        std = np.nanstd(per_seed, axis=0)
+
+        # Seed-averaged surface — only valid if every seed shares the same grid.
+        base = valid[0]
+        same_grid = all(
+            L.grid.shape == base.grid.shape and np.allclose(L.grid, base.grid)
+            for L in valid
+        )
+        if not same_grid:
+            LOGGER.warning(
+                "MLE bias: seeds have mismatched θ grids; falling back to "
+                "mean-of-per-seed MLE (will not match the averaged-surface plot)."
+            )
+            return np.nanmean(per_seed, axis=0), std, np.zeros(theta_true.shape, bool)
+
+        avg_llr = np.mean([np.asarray(L.llr, dtype=float) for L in valid], axis=0)
+        theta_hat, unconstrained = self._marginal_mle(
+            base.grid, avg_llr, base.resolutions
+        )
+        return theta_hat - theta_true, std, unconstrained
 
     def _load_checkpoint_limits(self, exp: str, model: str, run: int):
         """Load just the ``limits`` from a run's checkpoint (no model rebuild).
@@ -457,13 +498,11 @@ class Ensemble:
         The histogram method bins observables; it never predicts ``t`` or
         ``log r`` per event, so the correlation and MSE columns are left empty.
         """
-        biases, param_names = [], None
-        for run in runs:
-            limits = self._load_checkpoint_limits(exp, model, run)
-            biases.append(self._mle_bias_from_limits(limits))
-            if param_names is None and limits is not None:
-                param_names = list(limits.param_names)
-        biases = np.asarray(biases, dtype=float)  # (n_runs, n_params)
+        limits_list = [self._load_checkpoint_limits(exp, model, run) for run in runs]
+        param_names = next(
+            (list(L.param_names) for L in limits_list if L is not None), None
+        )
+        central, std, unconstrained = self._mle_bias_aggregate(limits_list)
         return {
             "label": MODEL2LABEL[model],
             "kind": "histo",
@@ -473,8 +512,9 @@ class Ensemble:
             "rho_std": np.array([]),
             "mse_mean": float("nan"),
             "mse_std": float("nan"),
-            "mle_mean": np.nanmean(biases, axis=0),
-            "mle_std": np.nanstd(biases, axis=0),
+            "mle_mean": central,
+            "mle_std": std,
+            "mle_unconstrained": unconstrained,
         }
 
     def eval_correlations(self, out_dir: Path, plot_stem: str) -> None:
@@ -499,6 +539,7 @@ class Ensemble:
                 continue
 
             per_run = []
+            limits_list = []
             pooled_true, pooled_pred = [], []
             param_names = None
 
@@ -506,11 +547,8 @@ class Ensemble:
                 experiment = self._build_experiment(exp, model, run)
                 y_true, y_pred = self._test_truth_pred(experiment, exp)
 
-                metrics = self._corr_metrics(exp, y_true, y_pred)
-                metrics["mle_bias"] = self._mle_bias_from_limits(
-                    experiment.checkpoints.limits
-                )
-                per_run.append(metrics)
+                per_run.append(self._corr_metrics(exp, y_true, y_pred))
+                limits_list.append(experiment.checkpoints.limits)
 
                 pooled_true.append(y_true)
                 pooled_pred.append(y_pred)
@@ -521,7 +559,7 @@ class Ensemble:
                 # Free GPU/host memory before rebuilding the next seed's model.
                 del experiment
 
-            row = self._aggregate_runs(model, exp, per_run, param_names)
+            row = self._aggregate_runs(model, exp, per_run, param_names, limits_list)
             rows.append(row)
 
             # Pooled scatter plot (all seeds) for this model.
@@ -537,12 +575,16 @@ class Ensemble:
         if rows:
             self._write_correlation_table(rows, out_dir, plot_stem)
 
-    @staticmethod
-    def _aggregate_runs(model: str, exp: str, per_run, param_names) -> Dict:
-        """Reduce per-seed metrics to mean ± std for one model."""
+    def _aggregate_runs(self, model: str, exp: str, per_run, param_names, limits_list) -> Dict:
+        """Reduce per-seed metrics to mean ± std for one model.
+
+        ρ and MSE are averaged over seeds; the MLE bias is taken from the
+        seed-averaged LLR surface (see :meth:`_mle_bias_aggregate`) so it matches
+        the contour plots.
+        """
         rho = np.asarray([r["rho"] for r in per_run], dtype=float)  # (n_runs, n_comp)
         mse = np.asarray([r["mse"] for r in per_run], dtype=float)
-        mle = np.asarray([r["mle_bias"] for r in per_run], dtype=float)  # (n_runs, n_param)
+        central, std, unconstrained = self._mle_bias_aggregate(limits_list)
         return {
             "label": MODEL2LABEL[model],
             "kind": per_run[0]["kind"],
@@ -552,8 +594,9 @@ class Ensemble:
             "rho_std": np.nanstd(rho, axis=0),
             "mse_mean": float(np.nanmean(mse)),
             "mse_std": float(np.nanstd(mse)),
-            "mle_mean": np.nanmean(mle, axis=0),
-            "mle_std": np.nanstd(mle, axis=0),
+            "mle_mean": central,
+            "mle_std": std,
+            "mle_unconstrained": unconstrained,
         }
 
     @staticmethod
@@ -612,10 +655,18 @@ class Ensemble:
             return fmt(row["mse_mean"], row["mse_std"], math)
 
         def mle_cells(row, math: bool):
-            return [
-                fmt(row["mle_mean"][i], row["mle_std"][i], math, signed=True)
-                for i in range(len(bias_params))
-            ]
+            # Directions the data doesn't bound get flagged rather than printed
+            # as a number — their MLE rails to the grid edge and is not a bias.
+            flags = row.get("mle_unconstrained")
+            cells = []
+            for i in range(len(bias_params)):
+                if flags is not None and i < len(flags) and bool(flags[i]):
+                    cells.append("unconstr.")
+                else:
+                    cells.append(
+                        fmt(row["mle_mean"][i], row["mle_std"][i], math, signed=True)
+                    )
+            return cells
 
         # --- Markdown ---
         header = ["Model"]
@@ -641,6 +692,14 @@ class Ensemble:
             cells += [mse_cell(r, math=False)]
             cells += mle_cells(r, math=False)
             md_lines.append("| " + " | ".join(cells) + " |")
+        md_lines += [
+            "",
+            "_MLE bias = θ̂ − θ_true, where θ̂ is the minimum of each coefficient's "
+            "averaged 1D marginal of the seed-averaged LLR (the same marginal the "
+            "plots show), parabola-refined sub-grid; ± is the per-seed spread. "
+            "`unconstr.` marks coefficients whose 68% marginal reaches the grid "
+            "edge — the data does not bound them within the scan range._",
+        ]
         md = "\n".join(md_lines) + "\n"
 
         md_path = out_dir / f"{plot_stem}_correlations.md"

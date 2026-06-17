@@ -1,5 +1,5 @@
 test_split: 0.3 # histo templates are built from the (1 - test_split) "train" partition; test_split must be in (0, 1)
-luminosity: 300000 # for llr rate
+luminosity: 300000 # for llr rate (poisson yield), in pb-1, which is 300 fb-1
 n_toys: 500000
 theta_ranges: ???
 resolutions: ???

@@ -494,11 +494,30 @@ class BaseExperimentML(BaseExperiment):
                 # Gradient clipping (can be `null` or not appear in config)
                 max_norm = self.cfg.train.get("clip_grad_norm", float("inf"))
                 max_norm = max_norm if max_norm is not None else float("inf")
-                torch.nn.utils.clip_grad_norm_(
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     max_norm=max_norm,
                     error_if_nonfinite=False
                 )
+
+                # A finite forward loss does NOT guarantee finite gradients: the
+                # LLoCa frame math can leak NaN/Inf gradients (e.g. 0*inf in the
+                # backward of sqrt / normalize on degenerate, near-lightlike or
+                # collinear frames) while the forward output stays finite.
+                # clip_grad_norm_ with error_if_nonfinite=False then propagates
+                # those NaNs into opt.step(), permanently poisoning the weights —
+                # every subsequent forward loss is NaN and skipped above, which
+                # looks like "training suddenly diverges after N epochs". Skip
+                # the optimizer step for this batch instead. (grad_norm is the
+                # pre-clip total norm clip_grad_norm_ already computed.)
+                if not torch.isfinite(grad_norm):
+                    LOGGER.warning(
+                        f"Non-finite gradient norm ({grad_norm}) at epoch {e+1}, "
+                        f"global step {global_step}. Skipping optimizer step for "
+                        "this batch."
+                    )
+                    opt.zero_grad()
+                    continue
 
                 # Optimizer step
                 opt.step()
